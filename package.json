@@ -1,0 +1,16 @@
+{
+  "name": "ai-powered-bi-decision-intelligence-platform",
+  "version": "1.0.0",
+  "description": "AI-Powered Business Intelligence & Decision Intelligence Platform for Small Retail Businesses",
+  "scripts": {
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"blue,green\" \"npm run dev:server\" \"npm run dev:client\"",
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "test": "npm test --prefix server",
+    "build:client": "npm run build --prefix client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

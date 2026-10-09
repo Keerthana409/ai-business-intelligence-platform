@@ -1,0 +1,36 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "Backend API and ML Analytics Engine for AI-Powered BI & Decision Intelligence Platform",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test:auth": "node src/tests/auth.test.js",
+    "test:module2": "node src/tests/module2.test.js",
+    "test:module3": "node src/tests/module3.test.js",
+    "test:module4": "node src/tests/module4.test.js",
+    "test:module5": "node src/tests/module5.test.js",
+    "test:module6": "node src/tests/module6.test.js",
+    "test:module7": "node src/tests/module7.test.js",
+    "test:module8": "node src/tests/module8.test.js",
+    "test": "node src/tests/auth.test.js && node src/tests/module2.test.js && node src/tests/module3.test.js && node src/tests/module4.test.js && node src/tests/module5.test.js && node src/tests/module6.test.js && node src/tests/module7.test.js && node src/tests/module8.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.12.1",
+    "multer": "^1.4.5-lts.1",
+    "simple-statistics": "^7.8.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "supertest": "^7.3.1"
+  }
+}
