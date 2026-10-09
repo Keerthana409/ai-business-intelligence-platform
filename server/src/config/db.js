@@ -34,6 +34,20 @@ export const isTestEnvironment = () => {
 };
 
 /**
+ * Normalizes MongoDB URI to handle accidental missing '?' delimiters before query parameters
+ */
+export const normalizeMongoURI = (uri) => {
+  if (!uri || typeof uri !== 'string') return uri;
+  if (!uri.includes('?') && uri.includes('retryWrites=')) {
+    const match = uri.match(/^(.+\/)([^?]+?)(retryWrites=.+)$/);
+    if (match) {
+      return `${match[1]}${match[2]}?${match[3]}`;
+    }
+  }
+  return uri;
+};
+
+/**
  * Connect to MongoDB database with strict environment isolation safeguards
  * @param {string|null} customURI Optional explicit URI
  */
@@ -51,6 +65,8 @@ export const connectDB = async (customURI = null) => {
     console.warn('⚠️  [Database Warning]: MONGODB_URI is not set in environment variables. Database connection skipped.');
     return null;
   }
+
+  mongoURI = normalizeMongoURI(mongoURI);
 
   const targetDbName = getDatabaseNameFromURI(mongoURI);
 

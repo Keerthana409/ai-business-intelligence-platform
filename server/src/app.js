@@ -17,10 +17,51 @@ import auditRoutes from './routes/auditRoutes.js';
 const app = express();
 
 // Security Middlewares
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+const localOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, mobile apps, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Parse any configured CLIENT_URL (supports comma-separated list and strips trailing slashes)
+      const configuredOrigins = (process.env.CLIENT_URL || '')
+        .split(',')
+        .map((url) => url.trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+
+      let hostname = '';
+      try {
+        hostname = new URL(origin).hostname;
+      } catch {
+        hostname = '';
+      }
+
+      const isAllowed =
+        localOrigins.includes(origin) ||
+        configuredOrigins.includes(origin) ||
+        hostname.endsWith('.vercel.app') ||
+        hostname === 'vercel.app';
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
     credentials: true,
   })
 );

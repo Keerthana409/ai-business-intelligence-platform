@@ -7,7 +7,13 @@ import axios from 'axios';
  * Preserves local development default 'http://localhost:5000/api'.
  */
 const getBaseURL = () => {
-  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  const envUrl =
+    import.meta.env.VITE_API_URL ||
+    import.meta.env.VITE_API_BASE_URL ||
+    (import.meta.env.PROD
+      ? 'https://ai-business-intelligence-platform-n0qc.onrender.com/api'
+      : 'http://localhost:5000/api');
+
   if (!envUrl || !envUrl.trim()) {
     return 'http://localhost:5000/api';
   }

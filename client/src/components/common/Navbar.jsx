@@ -14,7 +14,8 @@ const Navbar = () => {
       .then((res) => {
         setBackendStatus(`Online (${res.data.status})`);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('[API Health Check Error]:', err?.message || err);
         setBackendStatus('Offline');
       });
   }, []);
