@@ -164,7 +164,7 @@ const Register = () => {
                 name="name"
                 value={formData.name}
                 onChange={handleChange}
-                placeholder="Keerthi"
+                placeholder="Name"
                 disabled={loading}
                 className={`form-input ${errors.name ? 'has-error' : ''}`}
                 style={{
