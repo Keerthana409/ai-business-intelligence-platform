@@ -44,56 +44,21 @@ const Navbar = () => {
         flexWrap: 'wrap',
         gap: '1rem'
       }}>
-        {/* Brand / Title */}
-        <Link to="/" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: 'var(--radius-sm)',
-            backgroundColor: 'var(--primary)',
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 800,
-            fontSize: '1rem'
-          }}>
-            BI
-          </div>
-          <div>
-            <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'block', lineHeight: 1.2 }}>
-              Retail Decision Platform
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Business Intelligence & Analytics
-            </span>
-          </div>
-        </Link>
+        {/* Live Backend Health Pill */}
+        <div style={{
+          padding: '0.25rem 0.65rem',
+          borderRadius: '9999px',
+          fontSize: '0.75rem',
+          fontWeight: 600,
+          backgroundColor: backendStatus.startsWith('Online') ? '#dcfce7' : '#fee2e2',
+          color: backendStatus.startsWith('Online') ? '#166534' : '#991b1b',
+          border: '1px solid currentColor'
+        }}>
+          API: {backendStatus}
+        </div>
 
-        {/* Status Pill & Navigation Links */}
+        {/* Navigation Links */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          {/* Live Backend Health Pill */}
-          <div style={{
-            padding: '0.25rem 0.65rem',
-            borderRadius: '9999px',
-            fontSize: '0.75rem',
-            fontWeight: 600,
-            backgroundColor: backendStatus.startsWith('Online') ? '#dcfce7' : '#fee2e2',
-            color: backendStatus.startsWith('Online') ? '#166534' : '#991b1b',
-            border: '1px solid currentColor'
-          }}>
-            API: {backendStatus}
-          </div>
-
-          <Link to="/" style={{
-            textDecoration: 'none',
-            color: 'var(--text-main)',
-            fontSize: '0.875rem',
-            fontWeight: 500
-          }}>
-            Home
-          </Link>
-
           {isAuthenticated ? (
             <>
               <Link to="/dashboard" style={{

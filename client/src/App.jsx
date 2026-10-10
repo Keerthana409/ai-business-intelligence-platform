@@ -1,9 +1,8 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import Navbar from './components/common/Navbar';
 import ProtectedRoute from './components/common/ProtectedRoute';
-import Home from './pages/Home';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -17,6 +16,14 @@ import Scenarios from './pages/Scenarios';
 import DecisionAudit from './pages/DecisionAudit';
 import './styles/theme.css';
 
+const RootRedirect = () => {
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) {
+    return null;
+  }
+  return <Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />;
+};
+
 function App() {
   return (
     <AuthProvider>
@@ -25,8 +32,8 @@ function App() {
           <Navbar />
           <main style={{ flex: 1 }}>
             <Routes>
-              {/* Homepage preserving 8 planned modules and system overview */}
-              <Route path="/" element={<Home />} />
+              {/* Default route redirects logged-in users to BI Dashboard and logged-out users to Login */}
+              <Route path="/" element={<RootRedirect />} />
 
               {/* Public Authentication Pages */}
               <Route path="/login" element={<Login />} />
@@ -122,8 +129,8 @@ function App() {
                 }
               />
 
-              {/* Fallback to Home */}
-              <Route path="*" element={<Navigate to="/" replace />} />
+              {/* Fallback to default route */}
+              <Route path="*" element={<RootRedirect />} />
             </Routes>
           </main>
         </div>
