@@ -158,7 +158,7 @@ export const simulatePriceChange = ({
 
   // Transparent assumptions & limitations
   const assumptions = [
-    `Selling price modified from $${baselinePrice.toFixed(2)} to $${simulatedPrice.toFixed(2)}.`,
+    `Selling price modified from ₹${baselinePrice.toFixed(2)} to ₹${simulatedPrice.toFixed(2)}.`,
     isAssumption
       ? `Hypothetical demand shift of ${assumedDemandPct > 0 ? '+' : ''}${assumedDemandPct.toFixed(1)}% explicitly assumed.`
       : `Constant-demand mode: sales volume assumed invariant (${baselineQuantity} units) regardless of price adjustment.`,
@@ -271,7 +271,7 @@ export const simulateDemandChange = ({
 
   const assumptions = [
     `Hypothetical demand shift of ${demandPct > 0 ? '+' : ''}${demandPct.toFixed(1)}% applied over a ${simulationPeriodDays}-day timeframe.`,
-    `Unit selling price maintained constant at $${sellingPrice.toFixed(2)}.`,
+    `Unit selling price maintained constant at ₹${sellingPrice.toFixed(2)}.`,
     'Simulated outcome is a hypothetical projection, not a guaranteed sales forecast.',
   ];
 
@@ -394,14 +394,21 @@ export const simulateInventoryReorder = ({
   }
 
   const isBelowSafetyThreshold = postReceiptStock < safetyTarget;
+  const avgDailyDemandVal = hasDemandHistory
+    ? Number(Number(historicalDemand.avgDailyDemand).toFixed(2))
+    : null;
+  const formulaExplanation = hasDemandHistory
+    ? `Current Stock (${stockNow}) - Expected Lead-Time Demand (${leadTimeDemand} over ${leadTime}d) = ${preReceiptRemainingStock} remaining before arrival; + Order Quantity (${orderQty}) = ${postReceiptStock} net units after arrival.`
+    : `Current Stock (${stockNow}) + Order Quantity (${orderQty}) = ${postReceiptStock} units (lead-time demand not deducted due to <3 trading days).`;
 
   const assumptions = [
-    `Assumes purchase order of ${orderQty} units placed today and received after ${leadTime} days transit lead time.`,
-    'Order shipment is not available on shelf to satisfy consumer demand before actual delivery.',
+    `Assumes purchase order of ${orderQty} units placed today and received after ${leadTime} days supplier lead time.`,
+    `Gross stock committed (Current Stock ${stockNow} + Order ${orderQty}) = ${stockNow + orderQty} units.`,
     hasDemandHistory
-      ? `Estimated lead-time depletion based on observed average daily demand velocity of ${Number(historicalDemand.avgDailyDemand).toFixed(1)} units/day.`
+      ? `Expected demand during ${leadTime}-day supplier lead time is ${leadTimeDemand} units (${avgDailyDemandVal} units/day × ${leadTime} days).`
       : 'Depletion rate omitted due to limited historical trading days.',
-    'Hypothetical operational projection. Supplier delivery variance and demand spikes may impact stock balances.',
+    formulaExplanation,
+    'Simulation runs strictly in-memory and does not modify actual inventory, sales, or product records.',
   ];
 
   if (!hasCost) {
@@ -425,6 +432,7 @@ export const simulateInventoryReorder = ({
     },
     timeline: {
       stockBeforeArrival: stockNow,
+      avgDailyDemand: avgDailyDemandVal,
       leadTimeDemand,
       hasDemandHistory,
       preReceiptRemainingStock,
@@ -435,6 +443,7 @@ export const simulateInventoryReorder = ({
       stockPostDeliveryAndDemand: postReceiptStock,
       safetyStockTarget: safetyTarget,
       isBelowSafetyThreshold,
+      formulaExplanation,
     },
     financialImpact: {
       unitCost,
@@ -512,7 +521,7 @@ export const simulateDiscount = ({
     profitMatchExplanation = 'Baseline gross profit is zero or negative. Profit-matching quantity is not applicable.';
   } else if (discountedUnitMargin <= 0) {
     isProfitMatchPossible = false;
-    profitMatchExplanation = `Discounted price ($${discountedPrice.toFixed(2)}) does not exceed unit cost ($${unitCost.toFixed(2)}). Unit margin is $${discountedUnitMargin.toFixed(2)}; profit-matching is mathematically impossible.`;
+    profitMatchExplanation = `Discounted price (₹${discountedPrice.toFixed(2)}) does not exceed unit cost (₹${unitCost.toFixed(2)}). Unit margin is ₹${discountedUnitMargin.toFixed(2)}; profit-matching is mathematically impossible.`;
   } else {
     // Q_match = ceil(Pi_0 / M_d)
     profitMatchQuantity = Math.ceil(baselineGrossProfit / discountedUnitMargin);
@@ -520,7 +529,7 @@ export const simulateDiscount = ({
     pctVolumeIncreaseNeeded = baselineQuantity > 0
       ? calculatePercentageChange(baselineQuantity, profitMatchQuantity)
       : null;
-    profitMatchExplanation = `To match historical baseline gross profit of $${baselineGrossProfit.toFixed(2)} at the reduced unit margin of $${discountedUnitMargin.toFixed(2)}, sales volume must reach ${profitMatchQuantity} units (${pctVolumeIncreaseNeeded !== null && pctVolumeIncreaseNeeded > 0 ? '+' : ''}${pctVolumeIncreaseNeeded !== null ? pctVolumeIncreaseNeeded.toFixed(1) : 0}% vs baseline).`;
+    profitMatchExplanation = `To match historical baseline gross profit of ₹${baselineGrossProfit.toFixed(2)} at the reduced unit margin of ₹${discountedUnitMargin.toFixed(2)}, sales volume must reach ${profitMatchQuantity} units (${pctVolumeIncreaseNeeded !== null && pctVolumeIncreaseNeeded > 0 ? '+' : ''}${pctVolumeIncreaseNeeded !== null ? pctVolumeIncreaseNeeded.toFixed(1) : 0}% vs baseline).`;
   }
 
   // Simulated results under user's hypothetical volume response
@@ -541,7 +550,7 @@ export const simulateDiscount = ({
   const pctDeltaGrossProfit = hasCost ? calculatePercentageChange(baselineGrossProfit, simulatedGrossProfit) : null;
 
   const assumptions = [
-    `Discount of ${dPct.toFixed(1)}% reduces unit selling price from $${originalPrice.toFixed(2)} to $${discountedPrice.toFixed(2)}.`,
+    `Discount of ${dPct.toFixed(1)}% reduces unit selling price from ₹${originalPrice.toFixed(2)} to ₹${discountedPrice.toFixed(2)}.`,
     assumedDemandBump !== 0
       ? `Hypothetical sales volume response of ${assumedDemandBump > 0 ? '+' : ''}${assumedDemandBump.toFixed(1)}% assumed.`
       : 'Zero automatic volume elasticity assumed without user-specified demand response.',
@@ -556,7 +565,7 @@ export const simulateDiscount = ({
     limitations.push('No sales records in baseline window. Baseline units evaluate to 0.');
   }
   if (isMarginZeroOrNegative) {
-    limitations.push(`Warning: Selling at $${discountedPrice.toFixed(2)} with unit cost $${unitCost.toFixed(2)} yields zero or negative gross profit.`);
+    limitations.push(`Warning: Selling at ₹${discountedPrice.toFixed(2)} with unit cost ₹${unitCost.toFixed(2)} yields zero or negative gross profit.`);
   }
 
   return {

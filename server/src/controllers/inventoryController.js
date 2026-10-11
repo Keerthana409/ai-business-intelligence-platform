@@ -49,8 +49,18 @@ export const getProducts = async (req, res) => {
  */
 export const createProduct = async (req, res) => {
   try {
-    const { sku, name, category, costPrice, sellingPrice, stockQuantity, reorderThreshold, unit, supplier } =
-      req.body;
+    const {
+      sku,
+      name,
+      category,
+      costPrice,
+      sellingPrice,
+      stockQuantity,
+      reorderThreshold,
+      leadTimeDays,
+      unit,
+      supplier,
+    } = req.body;
 
     if (!sku || !name || costPrice === undefined || sellingPrice === undefined) {
       return res.status(400).json({
@@ -70,6 +80,18 @@ export const createProduct = async (req, res) => {
       return res.status(400).json({
         status: 'fail',
         message: 'Stock quantity and reorder threshold cannot be negative',
+      });
+    }
+
+    const resolvedLeadTime =
+      leadTimeDays !== undefined && leadTimeDays !== null && String(leadTimeDays).trim() !== ''
+        ? Number(leadTimeDays)
+        : 7;
+
+    if (isNaN(resolvedLeadTime) || resolvedLeadTime < 1) {
+      return res.status(400).json({
+        status: 'fail',
+        message: 'Supplier lead time (leadTimeDays) must be at least 1 day',
       });
     }
 
@@ -95,6 +117,7 @@ export const createProduct = async (req, res) => {
       sellingPrice: Number(sellingPrice),
       stockQuantity: stockQuantity !== undefined ? Number(stockQuantity) : 0,
       reorderThreshold: reorderThreshold !== undefined ? Number(reorderThreshold) : 10,
+      leadTimeDays: Math.round(resolvedLeadTime),
       unit: unit || 'pcs',
       supplier: supplier || '',
     });
@@ -120,8 +143,18 @@ export const createProduct = async (req, res) => {
  */
 export const updateProduct = async (req, res) => {
   try {
-    const { sku, name, category, costPrice, sellingPrice, stockQuantity, reorderThreshold, unit, supplier } =
-      req.body;
+    const {
+      sku,
+      name,
+      category,
+      costPrice,
+      sellingPrice,
+      stockQuantity,
+      reorderThreshold,
+      leadTimeDays,
+      unit,
+      supplier,
+    } = req.body;
 
     const product = await Product.findOne({ _id: req.params.id, userId: req.user.id });
 
@@ -130,6 +163,17 @@ export const updateProduct = async (req, res) => {
         status: 'fail',
         message: 'Product not found',
       });
+    }
+
+    if (leadTimeDays !== undefined && leadTimeDays !== null && String(leadTimeDays).trim() !== '') {
+      const parsedLead = Number(leadTimeDays);
+      if (isNaN(parsedLead) || parsedLead < 1) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Supplier lead time (leadTimeDays) must be at least 1 day',
+        });
+      }
+      product.leadTimeDays = Math.round(parsedLead);
     }
 
     // Check if new SKU clashes with another product
@@ -209,10 +253,10 @@ export const deleteProduct = async (req, res) => {
  */
 export const getInventoryTemplate = (req, res) => {
   const templateCsv =
-    'productName,sku,category,costPrice,sellingPrice,stockQuantity,reorderThreshold\n' +
-    'Cotton T-Shirt Blue,TSH-BLU-001,Clothing,12.50,24.99,50,15\n' +
-    'Organic Whole Milk 1L,MLK-ORG-002,Grocery,1.80,3.20,120,30\n' +
-    'Basmati Rice 5kg,RICE-BAS-003,Supermarket,8.00,14.50,40,10\n';
+    'productName,sku,category,costPrice,sellingPrice,stockQuantity,reorderThreshold,leadTimeDays\n' +
+    'Milk,S001,Grocery,22.00,30.00,60,15,7\n' +
+    'Wheat Flour,S004,Grocery,38.00,50.00,50,15,7\n' +
+    'Rice,S005,Supermarket,60.00,80.00,45,10,7\n';
 
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="inventory_template.csv"');
@@ -273,6 +317,10 @@ export const importInventoryCSV = async (req, res) => {
 
       const filter = { userId: req.user.id, sku: item.sku.trim() };
       const existing = await Product.findOne(filter);
+      const itemLeadTime =
+        item.leadTimeDays !== undefined && Number(item.leadTimeDays) >= 1
+          ? Math.round(Number(item.leadTimeDays))
+          : 7;
 
       if (existing) {
         existing.name = item.name.trim();
@@ -281,6 +329,9 @@ export const importInventoryCSV = async (req, res) => {
         existing.sellingPrice = Number(item.sellingPrice);
         existing.stockQuantity = Number(item.stockQuantity);
         existing.reorderThreshold = Number(item.reorderThreshold);
+        if (item.leadTimeDays !== undefined) {
+          existing.leadTimeDays = itemLeadTime;
+        }
         await existing.save();
         updatedCount++;
       } else {
@@ -293,6 +344,7 @@ export const importInventoryCSV = async (req, res) => {
           sellingPrice: Number(item.sellingPrice),
           stockQuantity: Number(item.stockQuantity),
           reorderThreshold: Number(item.reorderThreshold),
+          leadTimeDays: itemLeadTime,
         });
         createdCount++;
       }

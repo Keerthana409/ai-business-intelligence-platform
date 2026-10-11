@@ -9,7 +9,7 @@ import {
   getInventoryStockAnalytics,
   getLowStockAnalytics,
 } from '../services/analyticsService';
-import { formatCurrency, formatNumber, formatDate } from '../utils/formatters';
+import { formatCurrency, formatNumber, formatDate, formatShopCategory } from '../utils/formatters';
 
 import SalesOverTimeChart from '../components/charts/SalesOverTimeChart';
 import RevenueByProductChart from '../components/charts/RevenueByProductChart';
@@ -175,60 +175,6 @@ const Dashboard = () => {
     navigate('/login');
   };
 
-  const pipelineStages = [
-    {
-      id: 2,
-      name: 'Sales & Inventory Records',
-      status: 'Active (Module 2)',
-      desc: 'Point-of-sale transactions and catalog shelf counts active via CSV and manual CRUD.',
-      icon: '📊',
-    },
-    {
-      id: 3,
-      name: 'Business Intelligence Analytics',
-      status: 'Active (Module 3)',
-      desc: 'Interactive Recharts dashboards for revenue trends, category share, and stock health.',
-      icon: '📈',
-    },
-    {
-      id: 4,
-      name: 'ML Demand Forecasting Engine',
-      status: 'Active (Module 4)',
-      desc: 'Holt\'s linear exponential smoothing for revenue forecasts, product demand, and stockout risk.',
-      icon: '🤖',
-    },
-    {
-      id: 5,
-      name: 'Anomaly Detection & Volatility Studio',
-      status: 'Active (Module 5)',
-      desc: 'Non-parametric IQR corridors, modified Z-score receipt outliers, and sudden drop detection.',
-      icon: '🚨',
-    },
-    {
-      id: 6,
-      name: 'Business Recommendations & Decision Support',
-      status: 'Active (Module 6)',
-      desc: 'Transparent rule-based purchase orders, slow-moving clearance, and demand drop alerts.',
-      icon: '💡',
-    },
-    {
-      id: 7,
-      name: 'What-If Simulation Simulator',
-      status: 'Active (Module 7)',
-      desc: 'Model pricing changes, hypothetical demand shifts, discount breakevens, and supplier lead-time buffers.',
-      icon: '🧪',
-      link: '/scenarios',
-    },
-    {
-      id: 8,
-      name: 'Decision Audit & Outcome Tracking',
-      status: 'Active (Module 8)',
-      desc: 'Closed-loop empirical outcome evaluation, realized ROI accounting, and simulation reality verification.',
-      icon: '🎯',
-      link: '/decision-audit',
-    },
-  ];
-
   return (
     <div style={{ maxWidth: '1240px', margin: '0 auto', padding: '2rem 1.5rem' }}>
       {/* Welcome Banner */}
@@ -254,9 +200,26 @@ const Dashboard = () => {
               Welcome back, {user?.name || 'Retail Owner'}!
             </h1>
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.925rem' }}>
-            Business Intelligence & Decision Intelligence Workspace for{' '}
-            <strong style={{ color: 'var(--text-main)' }}>{user?.businessName || 'Your Shop'}</strong>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.925rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span>
+              Business Intelligence & Decision Intelligence Workspace for{' '}
+              <strong style={{ color: 'var(--text-main)' }}>{user?.businessName || 'Your Shop'}</strong>
+            </span>
+            {user?.businessType && (
+              <span
+                style={{
+                  backgroundColor: '#eff6ff',
+                  color: '#1d4ed8',
+                  border: '1px solid #bfdbfe',
+                  padding: '0.15rem 0.6rem',
+                  borderRadius: '9999px',
+                  fontWeight: 600,
+                  fontSize: '0.75rem',
+                }}
+              >
+                {formatShopCategory(user.businessType)}
+              </span>
+            )}
           </p>
         </div>
 
@@ -682,7 +645,7 @@ const Dashboard = () => {
         />
       </section>
 
-      {/* Module 4: Predictive Intelligence Snapshot */}
+      {/* Predictive Intelligence Snapshot */}
       <section style={{ marginBottom: '2.5rem' }}>
         <div
           style={{
@@ -716,7 +679,7 @@ const Dashboard = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Predictive Analytics & Demand Forecasting (Module 4)
+                  Predictive Analytics & Demand Forecasting
                 </h3>
                 <span
                   style={{
@@ -732,7 +695,7 @@ const Dashboard = () => {
                 </span>
               </div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
-                Holt's Linear Exponential Smoothing projections, product demand estimation, and predictive stockout risk analysis.
+                7-day revenue projections, daily product demand estimates, and supplier lead-time stockout risk analysis.
               </p>
             </div>
           </div>
@@ -759,7 +722,7 @@ const Dashboard = () => {
         </div>
       </section>
 
-      {/* Module 5: Anomaly Intelligence Snapshot */}
+      {/* Anomaly Intelligence Snapshot */}
       <section style={{ marginBottom: '2.5rem' }}>
         <div
           style={{
@@ -793,7 +756,7 @@ const Dashboard = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Anomaly Detection & Volatility Studio (Module 5)
+                  Anomaly Detection & Volatility Studio
                 </h3>
                 <span
                   style={{
@@ -809,7 +772,7 @@ const Dashboard = () => {
                 </span>
               </div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
-                Non-parametric IQR corridors, trailing median baseline evaluation, and Boris Iglewicz–David Hoaglin modified Z-score receipt outlier flags.
+                Automated daily revenue range monitoring, sudden sales drop alerts, and unusual receipt detection.
               </p>
             </div>
           </div>
@@ -836,7 +799,7 @@ const Dashboard = () => {
         </div>
       </section>
 
-      {/* Module 6: Business Recommendations Snapshot */}
+      {/* Business Recommendations Snapshot */}
       <section style={{ marginBottom: '2.5rem' }}>
         <div
           style={{
@@ -870,7 +833,7 @@ const Dashboard = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Decision Support & Recommendations (Module 6)
+                  Decision Support & Recommendations
                 </h3>
                 <span
                   style={{
@@ -913,7 +876,84 @@ const Dashboard = () => {
         </div>
       </section>
 
-      {/* Module 8: Decision Audit & Outcome Tracking Snapshot */}
+      {/* What-If Simulator Snapshot */}
+      <section style={{ marginBottom: '2.5rem' }}>
+        <div
+          style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '1.5rem',
+            boxShadow: 'var(--shadow-sm)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '1rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div
+              style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: '#ede9fe',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.75rem',
+              }}
+            >
+              🧪
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  What-If Scenario Simulation Engine
+                </h3>
+                <span
+                  style={{
+                    fontSize: '0.725rem',
+                    fontWeight: 700,
+                    backgroundColor: '#dcfce7',
+                    color: '#166534',
+                    padding: '0.15rem 0.5rem',
+                    borderRadius: '9999px',
+                  }}
+                >
+                  Active
+                </span>
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
+                Simulate pricing adjustments, demand shifts, supplier lead-time buffers, and promotional discounts without mutating live catalog data.
+              </p>
+            </div>
+          </div>
+
+          <Link
+            to="/scenarios"
+            style={{
+              backgroundColor: '#7c3aed',
+              color: '#ffffff',
+              padding: '0.65rem 1.25rem',
+              borderRadius: 'var(--radius-md)',
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              boxShadow: 'var(--shadow-sm)',
+            }}
+          >
+            <span>Open What-If Simulator</span>
+            <span>&rarr;</span>
+          </Link>
+        </div>
+      </section>
+
+      {/* Decision Audit & Outcome Tracking Snapshot */}
       <section style={{ marginBottom: '2.5rem' }}>
         <div
           style={{
@@ -947,7 +987,7 @@ const Dashboard = () => {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Decision Audit & Outcome Tracking (Module 8)
+                  Decision Audit & Outcome Tracking
                 </h3>
                 <span
                   style={{
@@ -989,7 +1029,6 @@ const Dashboard = () => {
           </Link>
         </div>
       </section>
-
 
       {/* Quick Action Navigation Grid */}
       <section style={{ marginBottom: '2.5rem' }}>
@@ -1114,62 +1153,43 @@ const Dashboard = () => {
               </p>
             </div>
           </Link>
-        </div>
-      </section>
 
-      {/* Analytical Modules Road-map */}
-      <section>
-        <div style={{ marginBottom: '1.25rem' }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-main)' }}>
-            Analytical Features Pipeline
-          </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Current pipeline progression for your retail intelligence platform
-          </p>
-        </div>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-            gap: '1.25rem',
-          }}
-        >
-          {pipelineStages.map((stage) => (
+          {/* What-If Simulator Workspace */}
+          <Link
+            to="/scenarios"
+            style={{
+              textDecoration: 'none',
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '1.25rem',
+              boxShadow: 'var(--shadow-sm)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+            }}
+          >
             <div
-              key={stage.id}
               style={{
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '1.25rem',
-                boxShadow: 'var(--shadow-sm)',
+                width: '44px',
+                height: '44px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: '#ede9fe',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.5rem',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-                <span style={{ fontSize: '1.5rem' }}>{stage.icon}</span>
-                <span
-                  style={{
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                    padding: '0.2rem 0.5rem',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: stage.status.includes('Active') ? '#dcfce7' : 'var(--bg-main)',
-                    color: stage.status.includes('Active') ? '#166534' : 'var(--text-muted)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {stage.status}
-                </span>
-              </div>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '0.4rem' }}>
-                Module {stage.id}: {stage.name}
-              </h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
-                {stage.desc}
+              🧪
+            </div>
+            <div>
+              <h4 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>What-If Simulator</h4>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                Model price changes, demand shifts, and reorder buffers
               </p>
             </div>
-          ))}
+          </Link>
         </div>
       </section>
     </div>

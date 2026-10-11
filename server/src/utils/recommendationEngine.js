@@ -57,7 +57,9 @@ export const calculateReorderQuantity = ({
   if (hasSufficientData && avgDailyDemand > 0) {
     const leadTimeDemand = Number((avgDailyDemand * leadTime).toFixed(1));
     const targetStock = Math.ceil(threshold + leadTimeDemand);
-    const suggestedQuantity = Math.max(0, Math.ceil(targetStock - stock));
+    const rawSuggested = Math.max(0, Math.ceil(targetStock - stock));
+    const suggestedQuantity =
+      stock === 0 && rawSuggested === 0 ? Math.max(1, threshold || 10) : rawSuggested;
 
     return {
       suggestedQuantity,
@@ -69,7 +71,7 @@ export const calculateReorderQuantity = ({
 
   // Fallback for insufficient sales history: only suggest when restock is justified (stock <= threshold)
   if (stock <= threshold) {
-    const targetStock = threshold * 2;
+    const targetStock = Math.max(threshold * 2, stock + 1);
     const suggestedQuantity = Math.max(1, targetStock - stock);
 
     return {
@@ -90,8 +92,9 @@ export const calculateReorderQuantity = ({
 
 /**
  * Evaluate product declining sales over a 14-day split-window:
- * Period 1 (Days t-14 to t-8) vs. Period 2 (Days t-7 to t-1).
- * Day t is strictly excluded.
+ * Period 1 (7 days prior) vs. Period 2 (most recent 7 days).
+ * Anchors comparison windows to the latest available sales date instead of blindly
+ * using wall-clock today when the sales dataset is older.
  *
  * Requires:
  * - Store to have >= 7 distinct recorded trading days.
@@ -100,29 +103,71 @@ export const calculateReorderQuantity = ({
  * @param {object} params
  * @param {Array<{ date: Date|string, quantity: number }>} params.productSales
  * @param {number} params.distinctStoreTradingDays - Store-wide recorded trading days
- * @param {Date|string} [params.referenceDate] - Target day t
+ * @param {Date|string|null} [params.referenceDate] - Reference date or latest store sales date
+ * @param {Date|string|null} [params.latestSalesDate] - Explicit latest store sales date
  * @returns {object|null}
  */
 export const evaluateProductDecliningSales = ({
   productSales = [],
   distinctStoreTradingDays = 0,
-  referenceDate = new Date(),
+  referenceDate = null,
+  latestSalesDate = null,
 }) => {
   // Gate: Store must have established empirical trading history (>= 7 distinct trading days)
-  if (distinctStoreTradingDays < 7) {
+  if (distinctStoreTradingDays < 7 || !Array.isArray(productSales) || productSales.length === 0) {
     return null;
   }
 
-  const refDateObj = new Date(referenceDate);
-  if (isNaN(refDateObj.getTime())) return null;
+  // Find latest sale date in productSales
+  let maxProdDayMs = null;
+  const prodSaleDaySet = new Set();
+  for (const s of productSales) {
+    const d = new Date(s.date);
+    if (isNaN(d.getTime())) continue;
+    const key = d.toISOString().slice(0, 10);
+    prodSaleDaySet.add(key);
+    const dayMs = Date.parse(`${key}T00:00:00.000Z`);
+    if (maxProdDayMs === null || dayMs > maxProdDayMs) {
+      maxProdDayMs = dayMs;
+    }
+  }
 
-  // Window bounds (UTC)
-  const d14Ago = new Date(refDateObj);
-  d14Ago.setUTCDate(d14Ago.getUTCDate() - 14);
-  const d7Ago = new Date(refDateObj);
-  d7Ago.setUTCDate(d7Ago.getUTCDate() - 7);
-  const d1Ago = new Date(refDateObj);
-  d1Ago.setUTCDate(d1Ago.getUTCDate() - 1);
+  if (maxProdDayMs === null) return null;
+
+  // Determine inclusive end date (UTC midnight) of Period 2 (recent 7-day window)
+  let period2EndMs = maxProdDayMs;
+
+  if (latestSalesDate) {
+    const storeLatest = new Date(latestSalesDate);
+    if (!isNaN(storeLatest.getTime())) {
+      const storeKey = storeLatest.toISOString().slice(0, 10);
+      period2EndMs = Date.parse(`${storeKey}T00:00:00.000Z`);
+    }
+  } else if (referenceDate) {
+    const refObj = new Date(referenceDate);
+    if (!isNaN(refObj.getTime())) {
+      const refKey = refObj.toISOString().slice(0, 10);
+      const refDayMs = Date.parse(`${refKey}T00:00:00.000Z`);
+      const diffDays = Math.round((refDayMs - maxProdDayMs) / 86400000);
+
+      // If referenceDate is within 1 day of the product's latest sale (e.g., t when sales end at t-1),
+      // exclude day t if no sales occurred on day t; otherwise if referenceDate is far in the future
+      // (such as wall-clock new Date() on an older dataset), anchor to maxProdDayMs.
+      if (diffDays === 1 && !prodSaleDaySet.has(refKey)) {
+        period2EndMs = refDayMs - 86400000;
+      } else if (diffDays <= 1) {
+        period2EndMs = refDayMs;
+      } else {
+        period2EndMs = maxProdDayMs;
+      }
+    }
+  }
+
+  // Period 2: 7 calendar days ending on period2EndMs [period2EndMs - 6d .. period2EndMs]
+  // Period 1: 7 calendar days prior [period2EndMs - 13d .. period2EndMs - 7d]
+  const p2StartMs = period2EndMs - 6 * 86400000;
+  const p1EndMs = period2EndMs - 7 * 86400000;
+  const p1StartMs = period2EndMs - 13 * 86400000;
 
   const p1Dates = new Set();
   let unitsP1 = 0;
@@ -137,14 +182,15 @@ export const evaluateProductDecliningSales = ({
     if (isNaN(saleDate.getTime())) continue;
 
     const dateKey = saleDate.toISOString().slice(0, 10);
+    const saleDayMs = Date.parse(`${dateKey}T00:00:00.000Z`);
     const qty = Number(s.quantity ?? s.quantitySold ?? 0);
-    const rev = Number(s.totalRevenue ?? (qty * (s.unitPrice || 0)));
+    const rev = Number(s.totalRevenue ?? qty * (s.unitPrice || 0));
 
-    if (saleDate >= d14Ago && saleDate < d7Ago) {
+    if (saleDayMs >= p1StartMs && saleDayMs <= p1EndMs) {
       unitsP1 += qty;
       revenueP1 += rev;
       p1Dates.add(dateKey);
-    } else if (saleDate >= d7Ago && saleDate <= d1Ago) {
+    } else if (saleDayMs >= p2StartMs && saleDayMs <= period2EndMs) {
       unitsP2 += qty;
       revenueP2 += rev;
       p2Dates.add(dateKey);
@@ -174,6 +220,7 @@ export const evaluateProductDecliningSales = ({
     declinePct,
     p1DaysWithSales: p1Dates.size,
     p2DaysWithSales: p2Dates.size,
+    referenceDateUsed: new Date(period2EndMs).toISOString().slice(0, 10),
   };
 };
 
@@ -255,19 +302,35 @@ export const generateCandidateRecommendations = ({
   distinctStoreTradingDays = 0,
   dailyAnomalyResult = null,
   horizon = 14,
+  mlDemandOverrides = null,
 }) => {
   const candidates = [];
 
-  // Group sales by product id and product name for fast lookups
+  // Group sales by product id and product name for fast lookups, and find latest store sale date
   const salesByProduct = new Map();
+  let latestSaleTimeMs = 0;
 
   for (const s of sales) {
-    const key = s.productId ? String(s.productId) : `name_${(s.productName || '').trim().toLowerCase()}`;
-    if (!salesByProduct.has(key)) {
-      salesByProduct.set(key, []);
+    const d = new Date(s.date);
+    if (!isNaN(d.getTime()) && d.getTime() > latestSaleTimeMs) {
+      latestSaleTimeMs = d.getTime();
     }
-    salesByProduct.get(key).push(s);
+
+    if (s.productId) {
+      const idKey = String(s.productId);
+      if (!salesByProduct.has(idKey)) salesByProduct.set(idKey, []);
+      salesByProduct.get(idKey).push(s);
+    }
+    const cleanName = (s.productName || '').trim().toLowerCase();
+    if (cleanName) {
+      const nameKey = `name_${cleanName}`;
+      if (!salesByProduct.has(nameKey)) salesByProduct.set(nameKey, []);
+      salesByProduct.get(nameKey).push(s);
+    }
   }
+
+  const latestStoreSaleDate =
+    latestSaleTimeMs > 0 ? new Date(latestSaleTimeMs) : new Date();
 
   // 1. Evaluate Product-Level Rules
   for (const prod of products) {
@@ -275,10 +338,18 @@ export const generateCandidateRecommendations = ({
     const prodCleanName = (prod.name || '').trim();
     const cleanNameKey = `name_${prodCleanName.toLowerCase()}`;
 
-    // Combine direct productId matches and name fallback matches
+    // Combine direct productId matches and unlinked name matches (deduplicated) to match Forecast & What-If
     const directSales = salesByProduct.get(prodIdStr) || [];
     const nameSales = salesByProduct.get(cleanNameKey) || [];
-    const allProdSales = directSales.length > 0 ? directSales : nameSales;
+    const seenSaleRefs = new Set();
+    const allProdSales = [];
+    for (const s of [...directSales, ...nameSales]) {
+      const dedupId = s._id ? String(s._id) : s;
+      if (!seenSaleRefs.has(dedupId)) {
+        seenSaleRefs.add(dedupId);
+        allProdSales.push(s);
+      }
+    }
 
     const stock = Number(prod.stockQuantity) || 0;
     const threshold = Number(prod.reorderThreshold) || 10;
@@ -287,7 +358,7 @@ export const generateCandidateRecommendations = ({
     const price = Number(prod.sellingPrice) || 0;
     const supplier = prod.supplier || 'Primary Supplier';
 
-    // 1A. Run Demand & Risk Evaluation (Reusing forecastingEngine)
+    // 1A. Run Demand & Risk Evaluation (Reusing forecastingEngine + optional ML override)
     const demandEval = evaluateProductDemandRisk({
       salesRecords: allProdSales.map((s) => ({ date: s.date, quantity: s.quantitySold })),
       stockQuantity: stock,
@@ -296,9 +367,20 @@ export const generateCandidateRecommendations = ({
       horizon,
     });
 
-    const hasDemandHistory = demandEval.hasSufficientData;
-    const avgDailyDemand = demandEval.avgDailyDemand || 0;
-    const runoutDays = demandEval.runoutDays;
+    const mlOverride =
+      mlDemandOverrides instanceof Map
+        ? mlDemandOverrides.get(prodIdStr)
+        : mlDemandOverrides?.[prodIdStr] || null;
+
+    const hasDemandHistory = mlOverride ? true : demandEval.hasSufficientData;
+    const avgDailyDemand = mlOverride
+      ? Number(mlOverride.avgDailyDemand ?? demandEval.avgDailyDemand ?? 0)
+      : demandEval.avgDailyDemand || 0;
+    const runoutDays = mlOverride
+      ? mlOverride.runoutDays ?? demandEval.runoutDays
+      : demandEval.runoutDays;
+    const demandAlgorithm =
+      mlOverride?.algorithm || demandEval.algorithm || 'Trend-Adjusted Demand Forecast';
 
     // 1B. Reorder Quantity calculation
     const reorderResult = calculateReorderQuantity({
@@ -313,7 +395,7 @@ export const generateCandidateRecommendations = ({
     const estimatedCost = Number((suggestedUnits * cost).toFixed(2));
 
     // RULE REC-01: Out of Stock (stockQuantity === 0)
-    if (stock === 0) {
+    if (stock === 0 && suggestedUnits > 0) {
       candidates.push({
         dedupKey: `REC-01_${prodIdStr}`,
         ruleId: 'REC-01',
@@ -339,6 +421,7 @@ export const generateCandidateRecommendations = ({
           unitCost: cost,
           estimatedTotalCost: estimatedCost,
           supplier,
+          demandAlgorithm: hasDemandHistory ? demandAlgorithm : 'Safety Buffer Fallback',
         },
         explanation: {
           ruleTriggered: 'REC-01_ZERO_STOCK_STOCKOUT',
@@ -358,7 +441,13 @@ export const generateCandidateRecommendations = ({
       });
     }
     // RULE REC-02: Imminent Stockout within Lead Time (stock <= threshold and runout <= leadTime)
-    else if (stock <= threshold && hasDemandHistory && runoutDays !== null && runoutDays <= leadTime) {
+    else if (
+      stock <= threshold &&
+      hasDemandHistory &&
+      runoutDays !== null &&
+      runoutDays <= leadTime &&
+      suggestedUnits > 0
+    ) {
       candidates.push({
         dedupKey: `REC-02_${prodIdStr}`,
         ruleId: 'REC-02',
@@ -382,6 +471,7 @@ export const generateCandidateRecommendations = ({
           unitCost: cost,
           estimatedTotalCost: estimatedCost,
           supplier,
+          demandAlgorithm,
         },
         explanation: {
           ruleTriggered: 'REC-02_RUNOUT_LESS_THAN_LEAD_TIME',
@@ -394,7 +484,7 @@ export const generateCandidateRecommendations = ({
       });
     }
     // RULE REC-03: Low Stock Replenishment (stock <= threshold, runout > leadTime or demand history insufficient)
-    else if (stock <= threshold) {
+    else if (stock <= threshold && suggestedUnits > 0) {
       candidates.push({
         dedupKey: `REC-03_${prodIdStr}`,
         ruleId: 'REC-03',
@@ -420,6 +510,7 @@ export const generateCandidateRecommendations = ({
           unitCost: cost,
           estimatedTotalCost: estimatedCost,
           supplier,
+          demandAlgorithm: hasDemandHistory ? demandAlgorithm : 'Safety Buffer Fallback',
         },
         explanation: {
           ruleTriggered: 'REC-03_BELOW_REORDER_THRESHOLD',
@@ -431,13 +522,14 @@ export const generateCandidateRecommendations = ({
         status: 'pending',
       });
     }
-    // RULE REC-04: High Demand Stockout Risk (stock > threshold, but runout <= 1.5 * leadTime)
+    // RULE REC-04: High Demand Stockout Risk (stock > threshold, but runout <= 1.5 * leadTime and positive order needed)
     else if (
       stock > threshold &&
       hasDemandHistory &&
       avgDailyDemand > 0 &&
       runoutDays !== null &&
-      runoutDays <= leadTime * 1.5
+      runoutDays <= leadTime * 1.5 &&
+      suggestedUnits > 0
     ) {
       candidates.push({
         dedupKey: `REC-04_${prodIdStr}`,
@@ -462,6 +554,7 @@ export const generateCandidateRecommendations = ({
           unitCost: cost,
           estimatedTotalCost: estimatedCost,
           supplier,
+          demandAlgorithm,
         },
         explanation: {
           ruleTriggered: 'REC-04_HIGH_DEMAND_STOCKOUT_RISK',
@@ -474,11 +567,11 @@ export const generateCandidateRecommendations = ({
       });
     }
 
-    // 1C. Evaluate Declining Sales (REC-06)
+    // 1C. Evaluate Declining Sales (REC-06) anchored to latest available sales date
     const declineResult = evaluateProductDecliningSales({
       productSales: allProdSales,
       distinctStoreTradingDays,
-      referenceDate: new Date(),
+      latestSalesDate: latestStoreSaleDate,
     });
 
     if (declineResult && declineResult.isDeclining) {
@@ -513,9 +606,8 @@ export const generateCandidateRecommendations = ({
       });
     }
 
-    // 1D. Evaluate Slow-Moving & Overstock (REC-05)
-    // Calculate units sold in last 30 days
-    const thirtyDaysAgo = new Date();
+    // 1D. Evaluate Slow-Moving & Overstock (REC-05) anchored to latest available sales date
+    const thirtyDaysAgo = new Date(latestStoreSaleDate);
     thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
     const unitsSold30d = allProdSales
       .filter((s) => new Date(s.date) >= thirtyDaysAgo)
@@ -537,10 +629,10 @@ export const generateCandidateRecommendations = ({
         priority: slowMoveResult.priority,
         productId: prod._id,
         targetProduct: { id: prod._id, name: prod.name, sku: prod.sku, category: prod.category },
-        title: `Slow-Moving Stock: ${prod.name} has $${slowMoveResult.capitalAtRisk.toFixed(2)} tied up in excess inventory`,
+        title: `Slow-Moving Stock: ${prod.name} has ₹${slowMoveResult.capitalAtRisk.toFixed(2)} tied up in excess inventory`,
         actionProposed: `Consider a 10%–15% promotional clearance or product bundle to release capital. Pause future supplier orders until stock normalizes.`,
         reason: slowMoveResult.isDeadStock
-          ? `Product has ${stock} units on hand with zero sales recorded since catalog entry (>14 days). $${slowMoveResult.capitalAtRisk.toFixed(2)} in capital is immobilized.`
+          ? `Product has ${stock} units on hand with zero sales recorded since catalog entry (>14 days). ₹${slowMoveResult.capitalAtRisk.toFixed(2)} in capital is immobilized.`
           : `Current inventory of ${stock} units exceeds safety threshold (${threshold} units) by 2x. Only ${unitsSold30d} unit(s) sold in the past 30 days.`,
         isDataSufficient: true,
         evidence: {
@@ -556,7 +648,7 @@ export const generateCandidateRecommendations = ({
         explanation: {
           ruleTriggered: slowMoveResult.isDeadStock ? 'REC-05_DEAD_STOCK_ZERO_SALES' : 'REC-05_EXCESS_INVENTORY_SLOW_TURNOVER',
           factors: [
-            { metric: 'capitalAtRisk', value: slowMoveResult.capitalAtRisk, threshold: 50, description: 'Capital tied up in excess inventory exceeds $50 threshold.' },
+            { metric: 'capitalAtRisk', value: slowMoveResult.capitalAtRisk, threshold: 50, description: 'Capital tied up in excess inventory exceeds ₹50 threshold.' },
             { metric: 'stockQuantity', value: stock, threshold: threshold * 2, description: 'Stock quantity is more than double the reorder threshold.' },
           ],
         },
@@ -567,7 +659,7 @@ export const generateCandidateRecommendations = ({
 
   // 2. Evaluate Anomaly Action Rules (REC-07)
   if (dailyAnomalyResult && Array.isArray(dailyAnomalyResult.anomalies)) {
-    const sevenDaysAgoStr = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const sevenDaysAgoStr = new Date(latestStoreSaleDate.getTime() - 7 * 86400000).toISOString().slice(0, 10);
 
     for (const anom of dailyAnomalyResult.anomalies) {
       if (
@@ -584,7 +676,7 @@ export const generateCandidateRecommendations = ({
           productId: null,
           title: `Operational Audit: Extreme revenue drop recorded on ${anom.date}`,
           actionProposed: `Audit store register logs, operating hours, and out-of-stock events on ${anom.date} to diagnose root cause.`,
-          reason: anom.explanation || `Sales on ${anom.date} plunged by >= 80% below the trailing 7-day median baseline ($${anom.trailingMedian?.toFixed(2)}).`,
+          reason: anom.explanation || `Sales on ${anom.date} plunged by >= 80% below the trailing 7-day median baseline (₹${anom.trailingMedian?.toFixed(2)}).`,
           isDataSufficient: true,
           evidence: {
             anomalyDate: anom.date,

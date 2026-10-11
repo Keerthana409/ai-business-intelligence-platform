@@ -299,12 +299,79 @@ export const calculateDefensibleROI = (incrementalNetBenefit, investmentCost) =>
 };
 
 /**
+ * Resolve authoritative per-unit wholesale cost and total purchase outlay.
+ *
+ * Guarantees:
+ * 1. Unit wholesale cost (`unitCost`) is stored and resolved separately from total purchase outlay (`purchaseOutlay`).
+ * 2. If a caller mistakenly submits total order cost (`quantityOrdered * catalogUnitCost`) in the unit cost field,
+ *    it is normalized back to the per-unit wholesale cost so purchase outlay is never multiplied twice.
+ * 3. Total purchase outlay is calculated as `quantityOrdered * unitCost` exactly once.
+ *
+ * @param {Object} params
+ * @param {number} [params.quantityOrdered=0]
+ * @param {number|null} [params.submittedUnitCost=null]
+ * @param {number|null} [params.submittedCostPrice=null]
+ * @param {number|null} [params.catalogUnitCost=null]
+ * @param {number|null} [params.recommendationUnitCost=null]
+ * @returns {{ unitCost: number, costPrice: number, purchaseOutlay: number, capitalInvested: number, wasTotalCostNormalized: boolean }}
+ */
+export const resolveUnitCostAndOutlay = ({
+  quantityOrdered = 0,
+  submittedUnitCost = null,
+  submittedCostPrice = null,
+  catalogUnitCost = null,
+  recommendationUnitCost = null,
+} = {}) => {
+  const qty = Math.max(0, Number(quantityOrdered) || 0);
+  const refUnitCost =
+    catalogUnitCost !== null && catalogUnitCost !== undefined && Number(catalogUnitCost) > 0
+      ? Number(catalogUnitCost)
+      : recommendationUnitCost !== null &&
+          recommendationUnitCost !== undefined &&
+          Number(recommendationUnitCost) > 0
+        ? Number(recommendationUnitCost)
+        : 0;
+
+  const rawSubmitted =
+    submittedUnitCost !== null && submittedUnitCost !== undefined && Number(submittedUnitCost) > 0
+      ? Number(submittedUnitCost)
+      : submittedCostPrice !== null && submittedCostPrice !== undefined && Number(submittedCostPrice) > 0
+        ? Number(submittedCostPrice)
+        : 0;
+
+  let unitCost = rawSubmitted > 0 ? rawSubmitted : refUnitCost;
+  let wasTotalCostNormalized = false;
+
+  // Guard against total order cost (Q * refUnitCost) being passed in a field intended for unit wholesale cost
+  if (
+    qty > 1 &&
+    refUnitCost > 0 &&
+    rawSubmitted > 0 &&
+    Math.abs(rawSubmitted - roundCurrency(qty * refUnitCost)) < 0.01
+  ) {
+    unitCost = refUnitCost;
+    wasTotalCostNormalized = true;
+  }
+
+  unitCost = roundCurrency(unitCost);
+  const purchaseOutlay = roundCurrency(qty * unitCost);
+
+  return {
+    unitCost,
+    costPrice: unitCost,
+    purchaseOutlay,
+    capitalInvested: purchaseOutlay,
+    wasTotalCostNormalized,
+  };
+};
+
+/**
  * Evaluate inventory restock decision outcome.
  *
  * Distinguishes:
  * - Averted Stockout: stock was replenished and remained above 0 while active demand was met.
- * - Outlay: Q * costPrice.
- * - Capital Value of Units Sold: COGS of sold units.
+ * - Outlay: Q * unitCost (calculated once).
+ * - Capital Value of Units Sold: COGS of sold units (unitsSold * unitCost).
  * - Incremental Benefit: Post Gross Profit - Pre Gross Profit.
  * - ROI: Defensible calculation based on outlay.
  *
@@ -315,25 +382,43 @@ export const evaluateRestockOutcome = ({
   preMetrics,
   postMetrics,
   quantityOrdered = 0,
+  unitCost = null,
   costPrice = 0,
+  purchaseOutlay = null,
   minStockObserved = null,
   currentStock = 0,
   isMatured = false,
 }) => {
-  const investmentCost = roundCurrency(quantityOrdered * costPrice);
+  const resolvedUnitCost =
+    unitCost !== null && unitCost !== undefined && !isNaN(unitCost) && Number(unitCost) > 0
+      ? Number(unitCost)
+      : Number(costPrice) || 0;
+  const investmentCost =
+    purchaseOutlay !== null && purchaseOutlay !== undefined && !isNaN(purchaseOutlay) && Number(purchaseOutlay) >= 0
+      ? roundCurrency(purchaseOutlay)
+      : roundCurrency(Number(quantityOrdered) * resolvedUnitCost);
   const { deltaRevenue, deltaUnits, deltaGrossProfit, incrementalNetBenefit, hasSufficientData } =
     calculateIncrementalBenefit(preMetrics, postMetrics);
 
   const roiResult = calculateDefensibleROI(incrementalNetBenefit, investmentCost);
 
   // Stockout evaluation:
-  // If minStockObserved was > 0 and post units were sold, stockout was successfully averted.
-  // If stock reached 0 during observation, stockout was not fully averted.
+  // If no post-decision trading data exists yet, do not claim stockout prevention failed unless stock reached 0.
+  const observedStock =
+    minStockObserved !== null && minStockObserved !== undefined
+      ? Number(minStockObserved)
+      : Number(currentStock);
+  const hasPostTradingData =
+    Number(postMetrics?.distinctTradingDays || 0) > 0 ||
+    Number(postMetrics?.totalUnitsSold || 0) > 0;
+
   let stockoutAverted = null;
-  if (minStockObserved !== null) {
-    stockoutAverted = minStockObserved > 0 && postMetrics.totalUnitsSold > 0;
+  if (observedStock <= 0) {
+    stockoutAverted = false;
+  } else if (hasPostTradingData) {
+    stockoutAverted = true;
   } else {
-    stockoutAverted = currentStock > 0 && postMetrics.totalUnitsSold > 0;
+    stockoutAverted = null;
   }
 
   let status = 'in_observation';
@@ -343,17 +428,19 @@ export const evaluateRestockOutcome = ({
   if (!isMatured) {
     status = 'in_observation';
     outcomeRating = 'pending';
-    headline = 'Restock observation window currently active; metrics maturing.';
+    headline = hasPostTradingData
+      ? 'Restock observation window currently active; metrics maturing.'
+      : 'Pending post-decision trading data to evaluate stockout prevention and financial impact.';
   } else if (!hasSufficientData) {
     status = 'insufficient_data';
     outcomeRating = 'inconclusive';
     headline = 'Insufficient historical sales observations in evaluation window to finalize rating.';
   } else {
     status = 'evaluated_matured';
-    if (stockoutAverted && (incrementalNetBenefit === null || incrementalNetBenefit >= 0)) {
+    if (stockoutAverted === true && (incrementalNetBenefit === null || incrementalNetBenefit >= 0)) {
       outcomeRating = 'favorable';
       headline = 'Stockout successfully averted while maintaining positive product demand.';
-    } else if (!stockoutAverted && deltaUnits <= 0) {
+    } else if (stockoutAverted === false && deltaUnits <= 0) {
       outcomeRating = 'unfavorable';
       headline = 'Product experienced stockout gap during window despite restock order.';
     } else {
@@ -419,13 +506,13 @@ export const evaluateClearanceOutcome = ({
     status = 'evaluated_matured';
     if (capitalRecovered > 0 && deltaUnits > 0) {
       outcomeRating = 'favorable';
-      headline = `Successfully liquidated ${postMetrics.totalUnitsSold} units, unlocking $${capitalRecovered.toFixed(2)} in trapped working capital.`;
+      headline = `Successfully liquidated ${postMetrics.totalUnitsSold} units, unlocking ₹${capitalRecovered.toFixed(2)} in trapped working capital.`;
     } else if (postMetrics.totalUnitsSold === 0) {
       outcomeRating = 'unfavorable';
       headline = 'Clearance markdown produced zero units sold; inventory remains stagnant.';
     } else {
       outcomeRating = 'neutral';
-      headline = `Moderate clearance movement: $${capitalRecovered.toFixed(2)} recovered.`;
+      headline = `Moderate clearance movement: ₹${capitalRecovered.toFixed(2)} recovered.`;
     }
   }
 
@@ -442,7 +529,7 @@ export const evaluateClearanceOutcome = ({
     deltaGrossProfit,
     incrementalNetBenefit,
     roiPercent: null,
-    roiExplanation: 'N/A: Sunken working capital liquidation. Success measured by Trapped Capital Recovered ($) rather than new capital ROI.',
+    roiExplanation: 'N/A: Sunken working capital liquidation. Success measured by Trapped Capital Recovered (₹) rather than new capital ROI.',
     hasSufficientData,
   };
 };
@@ -477,10 +564,10 @@ export const evaluatePriceOptimizationOutcome = ({
     status = 'evaluated_matured';
     if (deltaGrossProfit !== null && deltaGrossProfit > 0) {
       outcomeRating = 'favorable';
-      headline = `Gross profit increased by $${deltaGrossProfit.toFixed(2)} following price modification.`;
+      headline = `Gross profit increased by ₹${deltaGrossProfit.toFixed(2)} following price modification.`;
     } else if (deltaGrossProfit !== null && deltaGrossProfit < 0) {
       outcomeRating = 'unfavorable';
-      headline = `Gross profit declined by $${Math.abs(deltaGrossProfit).toFixed(2)} post-adjustment.`;
+      headline = `Gross profit declined by ₹${Math.abs(deltaGrossProfit).toFixed(2)} post-adjustment.`;
     } else {
       outcomeRating = 'neutral';
       headline = 'Financial metrics remained stable within normal volatility bounds.';
@@ -572,7 +659,7 @@ export const evaluateSimulationCalibration = (
     unitsVariance,
     calibrationAssessment,
     explanation: isCompatible
-      ? `Simulated $${projectedRevenue.toFixed(2)} vs Observed Actual $${actualRevenue.toFixed(2)} (${revenueVariancePercent !== null && revenueVariancePercent >= 0 ? '+' : ''}${revenueVariancePercent}% variance).`
+      ? `Simulated ₹${projectedRevenue.toFixed(2)} vs Observed Actual ₹${actualRevenue.toFixed(2)} (${revenueVariancePercent !== null && revenueVariancePercent >= 0 ? '+' : ''}${revenueVariancePercent}% variance).`
       : `Horizon mismatch: Scenario modeled ${scenarioHorizon} days while audit tracked ${observationDays} days.`,
   };
 };

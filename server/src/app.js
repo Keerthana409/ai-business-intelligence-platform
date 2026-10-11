@@ -54,7 +54,8 @@ app.use(
         localOrigins.includes(origin) ||
         configuredOrigins.includes(origin) ||
         hostname.endsWith('.vercel.app') ||
-        hostname === 'vercel.app';
+        hostname === 'vercel.app' ||
+        hostname.endsWith('.onrender.com');
 
       if (isAllowed) {
         callback(null, true);

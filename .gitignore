@@ -38,8 +38,18 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-# Uploaded files (preserve directory structure via .gitkeep)
+# Uploaded files & CSV datasets (preserve directory structure via .gitkeep)
+*.csv
 uploads/*
 !uploads/.gitkeep
 server/uploads/*
 !server/uploads/.gitkeep
+
+# Python & ML Service Artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+ml_service/artifacts/*
+!ml_service/artifacts/.gitkeep

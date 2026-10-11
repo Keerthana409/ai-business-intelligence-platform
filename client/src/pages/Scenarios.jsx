@@ -265,12 +265,12 @@ const Scenarios = () => {
 
     return [
       {
-        name: 'Revenue ($)',
+        name: 'Revenue (₹)',
         Baseline: b.revenue || 0,
         Simulated: s.revenue || 0,
       },
       {
-        name: 'Gross Profit ($)',
+        name: 'Gross Profit (₹)',
         Baseline: b.grossProfit !== null ? b.grossProfit : 0,
         Simulated: s.grossProfit !== null ? s.grossProfit : 0,
       },
@@ -292,9 +292,6 @@ const Scenarios = () => {
             <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
               What-If Scenario Simulation Engine
             </h1>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, backgroundColor: '#ede9fe', color: '#6d28d9', border: '1px solid #ddd6fe', padding: '0.2rem 0.6rem', borderRadius: '9999px' }}>
-              Module 7
-            </span>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '850px', lineHeight: 1.5 }}>
             Model pricing adjustments, hypothetical demand shifts, supplier lead-time buffers, and promotional discounts without mutating catalog prices or stock records. Pure deterministic business arithmetic.
@@ -391,7 +388,7 @@ const Scenarios = () => {
                 >
                   {products.map((p) => (
                     <option key={p._id} value={p._id}>
-                      {p.name} ({p.sku}) — ${p.sellingPrice?.toFixed(2)} [Stock: {p.stockQuantity}]
+                      {p.name} ({p.sku}) — ₹{p.sellingPrice?.toFixed(2)} [Stock: {p.stockQuantity}]
                     </option>
                   ))}
                 </select>
@@ -399,8 +396,8 @@ const Scenarios = () => {
 
               {selectedProduct && (
                 <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', backgroundColor: 'var(--bg-main)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', color: 'var(--text-muted)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem' }}>
-                  <div>Catalog Price: <strong>${selectedProduct.sellingPrice?.toFixed(2)}</strong></div>
-                  <div>Unit Cost: <strong>{selectedProduct.costPrice ? `$${selectedProduct.costPrice.toFixed(2)}` : 'N/A'}</strong></div>
+                  <div>Catalog Price: <strong>₹{selectedProduct.sellingPrice?.toFixed(2)}</strong></div>
+                  <div>Unit Cost: <strong>{selectedProduct.costPrice ? `₹${selectedProduct.costPrice.toFixed(2)}` : 'N/A'}</strong></div>
                   <div>Current Stock: <strong>{selectedProduct.stockQuantity} units</strong></div>
                   <div>Lead Time: <strong>{selectedProduct.leadTimeDays || 7} days</strong></div>
                 </div>
@@ -412,7 +409,7 @@ const Scenarios = () => {
               <>
                 <div style={{ marginBottom: '1rem' }}>
                   <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.35rem', color: 'var(--text-main)' }}>
-                    Proposed Selling Price ($)
+                    Proposed Selling Price (₹)
                   </label>
                   <input
                     type="number"
@@ -606,7 +603,7 @@ const Scenarios = () => {
                   />
                   {selectedProduct && (
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '0.25rem' }}>
-                      Discounted Price: $
+                      Discounted Price: ₹
                       {(
                         (selectedProduct.sellingPrice || 0) *
                         (1 - Number(discountPercent || 0) / 100)
@@ -757,47 +754,83 @@ const Scenarios = () => {
 
               {/* Inventory-Specific KPI Cards */}
               {scenarioType === 'inventory_reorder' && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                  <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                      Post-Arrival Shelf Stock
-                    </span>
-                    <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: 'var(--primary)' }}>
-                      {simulationResult.timeline?.stockPostDeliveryAndDemand} units
-                    </h3>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      After transit depletion & delivery receipt
-                    </span>
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))', gap: '1rem' }}>
+                    <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        Current Stock + Order
+                      </span>
+                      <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: 'var(--text-main)' }}>
+                        {simulationResult.timeline?.stockAtReceipt} units
+                      </h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {simulationResult.timeline?.stockBeforeArrival} on shelf + {simulationResult.timeline?.orderQuantity} ordered
+                      </span>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        Lead-Time Demand ({simulationResult.inputs?.leadTimeDays}d)
+                      </span>
+                      <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: '#475569' }}>
+                        {simulationResult.timeline?.leadTimeDemand !== null && simulationResult.timeline?.leadTimeDemand !== undefined
+                          ? `${simulationResult.timeline.leadTimeDemand} units`
+                          : 'Unmodeled'}
+                      </h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {simulationResult.timeline?.avgDailyDemand
+                          ? `~${simulationResult.timeline.avgDailyDemand} units/day during transit`
+                          : 'Expected units sold before delivery'}
+                      </span>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        Net Stock After Arrival
+                      </span>
+                      <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: 'var(--primary)' }}>
+                        {simulationResult.timeline?.stockPostDeliveryAndDemand} units
+                      </h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {simulationResult.timeline?.preReceiptRemainingStock} remaining + {simulationResult.timeline?.orderQuantity} delivered
+                      </span>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        Estimated Order Outlay
+                      </span>
+                      <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: '#d97706' }}>
+                        {simulationResult.financialImpact?.estimatedInvestment !== null ? formatCurrency(simulationResult.financialImpact.estimatedInvestment) : 'N/A'}
+                      </h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {simulationResult.inputs?.proposedOrderQuantity} units @ {simulationResult.financialImpact?.unitCost ? `₹${simulationResult.financialImpact.unitCost.toFixed(2)}` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        Pre-Receipt Stockout Risk
+                      </span>
+                      <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: simulationResult.timeline?.isStockoutBeforeArrival ? '#dc2626' : '#16a34a' }}>
+                        {simulationResult.timeline?.isStockoutBeforeArrival === null
+                          ? 'Unmodeled'
+                          : simulationResult.timeline.isStockoutBeforeArrival
+                          ? `🚨 ${simulationResult.timeline.preReceiptStockoutUnits} units gap`
+                          : '✓ Sufficient'}
+                      </h3>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {simulationResult.timeline?.isStockoutBeforeArrival ? 'Shelf depletes before arrival' : 'Stock covers lead-time demand'}
+                      </span>
+                    </div>
                   </div>
 
-                  <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                      Estimated Order Outlay
-                    </span>
-                    <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: '#d97706' }}>
-                      {simulationResult.financialImpact?.estimatedInvestment !== null ? formatCurrency(simulationResult.financialImpact.estimatedInvestment) : 'N/A'}
-                    </h3>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {simulationResult.inputs?.proposedOrderQuantity} units @ {simulationResult.financialImpact?.unitCost ? `$${simulationResult.financialImpact.unitCost.toFixed(2)}` : 'N/A'}
-                    </span>
-                  </div>
-
-                  <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem' }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                      Pre-Receipt Stockout Exposure
-                    </span>
-                    <h3 style={{ fontSize: '1.5rem', fontWeight: 800, margin: '0.3rem 0', color: simulationResult.timeline?.isStockoutBeforeArrival ? '#dc2626' : '#16a34a' }}>
-                      {simulationResult.timeline?.isStockoutBeforeArrival === null
-                        ? 'Unmodeled'
-                        : simulationResult.timeline.isStockoutBeforeArrival
-                        ? `🚨 ${simulationResult.timeline.preReceiptStockoutUnits} units gap`
-                        : '✓ Sufficient'}
-                    </h3>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {simulationResult.timeline?.isStockoutBeforeArrival ? 'Shelf depletes before arrival' : 'Stock satisfies lead demand'}
-                    </span>
-                  </div>
-                </div>
+                  {simulationResult.timeline?.formulaExplanation && (
+                    <div style={{ backgroundColor: '#f8fafc', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '0.85rem 1.1rem', fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                      <strong>📐 Inventory Calculation Breakdown:</strong> {simulationResult.timeline.formulaExplanation}
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Discount Profit-Matching Analysis Box */}
@@ -812,8 +845,8 @@ const Scenarios = () => {
 
                   {simulationResult.profitMatch.isMarginZeroOrNegative && (
                     <div style={{ backgroundColor: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', padding: '0.65rem 0.85rem', borderRadius: 'var(--radius-sm)', marginBottom: '0.85rem', fontSize: '0.8rem' }}>
-                      ⚠️ <strong>Zero/Negative Contribution Margin:</strong> Discounted price ($
-                      {simulationResult.simulated?.sellingPrice?.toFixed(2)}) is at or below unit cost ($
+                      ⚠️ <strong>Zero/Negative Contribution Margin:</strong> Discounted price (₹
+                      {simulationResult.simulated?.sellingPrice?.toFixed(2)}) is at or below unit cost (₹
                       {simulationResult.simulated?.unitCost?.toFixed(2)}). Selling additional units will not recover profit.
                     </div>
                   )}

@@ -24,6 +24,7 @@ import {
   evaluateClearanceOutcome,
   evaluatePriceOptimizationOutcome,
   evaluateSimulationCalibration,
+  resolveUnitCostAndOutlay,
 } from '../utils/auditEngine.js';
 
 async function runModule8Tests() {
@@ -418,6 +419,107 @@ async function runModule8Tests() {
 
     const remainingAudits = await DecisionAudit.find({ userId: userA._id });
     assert(remainingAudits.length === 1, 'Audit record successfully removed from database');
+
+    console.log('--- 3. Regression Tests: Soap (SKU S002) 18-Unit Order at $18/Unit ---');
+
+    // 3.1 Unit test: resolveUnitCostAndOutlay & single multiplication of purchase outlay
+    const soapDirectCost = resolveUnitCostAndOutlay({
+      quantityOrdered: 18,
+      submittedUnitCost: 18,
+      catalogUnitCost: 18,
+    });
+    assert(soapDirectCost.unitCost === 18, 'Soap S002: Unit wholesale cost is $18.00');
+    assert(soapDirectCost.purchaseOutlay === 324, 'Soap S002: Purchase outlay is 18 * $18 = $324.00 (calculated once)');
+    assert(soapDirectCost.capitalInvested === 324, 'Soap S002: capitalInvested synced to $324.00');
+
+    // Guard when total order cost ($324) is mistakenly submitted in costPrice field
+    const soapNormalizedCost = resolveUnitCostAndOutlay({
+      quantityOrdered: 18,
+      submittedCostPrice: 324,
+      catalogUnitCost: 18,
+    });
+    assert(soapNormalizedCost.wasTotalCostNormalized === true, 'Soap S002 Guard: Detects total order cost ($324) passed as costPrice');
+    assert(soapNormalizedCost.unitCost === 18, 'Soap S002 Guard: Normalizes unitCost back to $18.00 (not $324.00)');
+    assert(soapNormalizedCost.purchaseOutlay === 324, 'Soap S002 Guard: Purchase outlay remains $324.00 (never double-multiplied to $5,832.00)');
+
+    // 3.2 API & Database Regression: Soap SKU S002 (unit cost $18, selling price $25, stock 12, order qty 18)
+    const soapProduct = await Product.create({
+      userId: userA._id,
+      sku: 'S002',
+      name: 'Soap',
+      category: 'Personal Care',
+      costPrice: 18,
+      sellingPrice: 25,
+      stockQuantity: 12,
+      reorderThreshold: 15,
+      leadTimeDays: 7,
+    });
+
+    // Historical sales matching Soap S002: 4 prior September sales + 1 pre-window sale on 2026-10-05 (6 units @ $25 = $150)
+    await Sale.insertMany([
+      { userId: userA._id, productId: soapProduct._id, productName: 'Soap', quantitySold: 2, unitPrice: 25, totalRevenue: 50, date: new Date('2026-09-20T00:00:00.000Z') },
+      { userId: userA._id, productId: soapProduct._id, productName: 'Soap', quantitySold: 2, unitPrice: 25, totalRevenue: 50, date: new Date('2026-09-21T00:00:00.000Z') },
+      { userId: userA._id, productId: soapProduct._id, productName: 'Soap', quantitySold: 12, unitPrice: 25, totalRevenue: 300, date: new Date('2026-09-26T00:00:00.000Z') },
+      { userId: userA._id, productId: soapProduct._id, productName: 'Soap', quantitySold: 2, unitPrice: 25, totalRevenue: 50, date: new Date('2026-09-27T00:00:00.000Z') },
+      { userId: userA._id, productId: soapProduct._id, productName: 'Soap', quantitySold: 6, unitPrice: 25, totalRevenue: 150, date: new Date('2026-10-05T00:00:00.000Z') },
+    ]);
+
+    const soapImplRes = await request(app)
+      .post('/api/audit/implement')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        decisionSource: 'manual_action',
+        decisionType: 'inventory_restock',
+        title: 'restock on Soap',
+        productId: soapProduct._id,
+        implementedAt: '2026-10-11',
+        observationWindowDays: 7,
+        implementedParameters: {
+          quantityOrdered: 18,
+          unitCost: 18,
+          costPrice: 18,
+        },
+      });
+
+    assert(soapImplRes.status === 201, 'Soap S002 implementation returns 201 Created');
+    const soapAudit = soapImplRes.body.data.audit;
+    assert(soapAudit.implementedParameters.quantityOrdered === 18, 'Soap S002: Order Qty is 18 units');
+    assert(soapAudit.implementedParameters.unitCost === 18, 'Soap S002: Stored unitCost is $18.00');
+    assert(soapAudit.implementedParameters.costPrice === 18, 'Soap S002: Stored costPrice is $18.00');
+    assert(soapAudit.implementedParameters.purchaseOutlay === 324, 'Soap S002: Stored purchaseOutlay is $324.00');
+    assert(soapAudit.implementedParameters.capitalInvested === 324, 'Soap S002: Stored capitalInvested is $324.00');
+    assert(soapAudit.evaluation.investmentCost === 324, 'Soap S002: Evaluation investmentCost is $324.00');
+    assert(soapAudit.baselineMetrics.distinctTradingDays === 1, 'Soap S002: Pre-window has 1 active trading day (2026-10-05)');
+    assert(soapAudit.baselineMetrics.totalUnitsSold === 6, 'Soap S002: Pre-window units sold is 6');
+    assert(soapAudit.baselineMetrics.totalRevenue === 150, 'Soap S002: Pre-window revenue is $150.00 (6 * $25)');
+    assert(soapAudit.baselineMetrics.totalCOGS === 108, 'Soap S002: Pre-window COGS is $108.00 (6 * $18)');
+    assert(soapAudit.baselineMetrics.grossProfit === 42, 'Soap S002: Pre-window gross profit is +$42.00 ($150 revenue - $108 COGS)');
+    assert(soapAudit.baselineMetrics.hasSufficientData === false, 'Soap S002: Pre-window hasSufficientData is false (1 < 3 trading days)');
+    assert(soapAudit.postMetrics.distinctTradingDays === 0, 'Soap S002: Post-window has 0 active trading days');
+    assert(soapAudit.evaluation.roiPercent === null, 'Soap S002: ROI remains null (N/A) when evidence is insufficient');
+
+    // Defensive API test: if client sends costPrice = 324 (total order outlay) for 18 units of Soap ($18 unit cost)
+    const soapGuardRes = await request(app)
+      .post('/api/audit/implement')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        decisionSource: 'manual_action',
+        decisionType: 'inventory_restock',
+        title: 'restock on Soap (total cost guard)',
+        productId: soapProduct._id,
+        implementedAt: '2026-10-11',
+        observationWindowDays: 7,
+        implementedParameters: {
+          quantityOrdered: 18,
+          costPrice: 324,
+        },
+      });
+
+    assert(soapGuardRes.status === 201, 'Soap S002 Guard API returns 201 Created');
+    const soapGuardAudit = soapGuardRes.body.data.audit;
+    assert(soapGuardAudit.implementedParameters.unitCost === 18, 'Soap S002 Guard API: Normalizes unitCost to $18.00');
+    assert(soapGuardAudit.implementedParameters.purchaseOutlay === 324, 'Soap S002 Guard API: Calculates purchaseOutlay as $324.00 (not $5,832.00)');
+    assert(soapGuardAudit.baselineMetrics.grossProfit === 42, 'Soap S002 Guard API: Calculates pre-window gross profit as +$42.00 (not -$1,794.00)');
 
     console.log(`\n🎉 Module 8 Tests Completed: ${passed} Passed, ${failed} Failed`);
 

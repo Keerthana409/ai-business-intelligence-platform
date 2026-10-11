@@ -107,12 +107,20 @@ const DecisionAudit = () => {
       } else if (rec.type === 'declining_sales_alert') {
         setModalType('demand_stabilization');
       }
-      if (rec.productId) {
-        setSelectedProductId(rec.productId);
-        const prod = productsList.find((p) => p._id === rec.productId);
-        if (prod) {
-          setModalCostPrice(prod.costPrice || '');
+      const recProdId = rec.productId?._id || rec.productId || '';
+      if (recProdId) {
+        setSelectedProductId(String(recProdId));
+        const prod = productsList.find((p) => String(p._id) === String(recProdId));
+        const resolvedUnitCost =
+          prod?.costPrice ??
+          rec.productId?.costPrice ??
+          rec.evidence?.unitCost ??
+          '';
+        if (resolvedUnitCost !== '') {
+          setModalCostPrice(resolvedUnitCost);
         }
+      } else if (rec.evidence?.unitCost !== undefined) {
+        setModalCostPrice(rec.evidence.unitCost);
       }
     }
   };
@@ -131,11 +139,17 @@ const DecisionAudit = () => {
         setModalType('price_optimization');
         setModalNewPrice(scen.inputs?.proposedPrice || '');
       }
-      if (scen.productId) {
-        setSelectedProductId(scen.productId);
-        const prod = productsList.find((p) => p._id === scen.productId);
-        if (prod) {
-          setModalCostPrice(prod.costPrice || '');
+      const scenProdId = scen.productId?._id || scen.productId || '';
+      if (scenProdId) {
+        setSelectedProductId(String(scenProdId));
+        const prod = productsList.find((p) => String(p._id) === String(scenProdId));
+        const resolvedUnitCost =
+          prod?.costPrice ??
+          scen.productId?.costPrice ??
+          scen.inputs?.unitCost ??
+          '';
+        if (resolvedUnitCost !== '') {
+          setModalCostPrice(resolvedUnitCost);
         }
       }
     }
@@ -143,9 +157,9 @@ const DecisionAudit = () => {
 
   const handleProductSelect = (prodId) => {
     setSelectedProductId(prodId);
-    const prod = productsList.find((p) => p._id === prodId);
+    const prod = productsList.find((p) => String(p._id) === String(prodId));
     if (prod) {
-      setModalCostPrice(prod.costPrice || '');
+      setModalCostPrice(prod.costPrice !== undefined ? prod.costPrice : '');
       if (!modalTitle) {
         setModalTitle(`Action on ${prod.name}`);
       }
@@ -162,6 +176,10 @@ const DecisionAudit = () => {
     setSubmittingImplement(true);
     setImplementError(null);
     try {
+      const qtyVal = modalQuantity ? Number(modalQuantity) : 0;
+      const unitCostVal = modalCostPrice ? Number(modalCostPrice) : 0;
+      const purchaseOutlayVal = Number((Math.round(qtyVal * unitCostVal * 100) / 100).toFixed(2));
+
       await implementDecision({
         decisionSource: implementSource,
         recommendationId: implementSource === 'recommendation' ? selectedRecId : undefined,
@@ -173,8 +191,10 @@ const DecisionAudit = () => {
         observationWindowDays: parseInt(modalWindow, 10),
         implementationNotes: modalNotes,
         implementedParameters: {
-          quantityOrdered: modalQuantity ? Number(modalQuantity) : 0,
-          costPrice: modalCostPrice ? Number(modalCostPrice) : 0,
+          quantityOrdered: qtyVal,
+          unitCost: unitCostVal,
+          costPrice: unitCostVal,
+          purchaseOutlay: purchaseOutlayVal,
           newPrice: modalNewPrice ? Number(modalNewPrice) : 0,
         },
       });
@@ -338,7 +358,7 @@ const DecisionAudit = () => {
         <div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <span style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '0.2rem 0.65rem', borderRadius: '9999px', fontSize: '0.75rem', fontWeight: 700 }}>
-              MODULE 8: CLOSED-LOOP DECISION INTELLIGENCE
+              CLOSED-LOOP DECISION INTELLIGENCE
             </span>
           </div>
           <h1 style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--text-main)', margin: '0 0 0.5rem 0' }}>
@@ -643,12 +663,25 @@ const DecisionAudit = () => {
 
                 {/* Specific Outcome Metrics Strip */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', marginBottom: '1rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                  {audit.evaluation?.stockoutAverted !== null && (
+                  {audit.decisionType === 'inventory_restock' && (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                       <strong>Stockout Protection:</strong>{' '}
-                      <span style={{ color: audit.evaluation?.stockoutAverted ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>
-                        {audit.evaluation?.stockoutAverted ? '✅ Averted (No stockout during window)' : '❌ Not Averted (Stock reached 0)'}
-                      </span>
+                      {audit.evaluation?.stockoutAverted === true ? (
+                        <span style={{ color: 'var(--success)', fontWeight: 700 }}>
+                          ✅ Averted (No stockout during window)
+                        </span>
+                      ) : audit.evaluation?.stockoutAverted === false &&
+                        (Number(audit.postMetrics?.distinctTradingDays || 0) > 0 ||
+                          Number(audit.postMetrics?.totalUnitsSold || 0) > 0 ||
+                          Number(audit.postMetrics?.currentStock ?? 1) <= 0) ? (
+                        <span style={{ color: 'var(--danger)', fontWeight: 700 }}>
+                          ❌ Not Averted (Stock reached 0)
+                        </span>
+                      ) : (
+                        <span style={{ color: '#d97706', fontWeight: 700 }}>
+                          ⏳ Pending (Awaiting post-decision trading data)
+                        </span>
+                      )}
                     </span>
                   )}
 
@@ -661,11 +694,11 @@ const DecisionAudit = () => {
                     </span>
                   )}
 
-                  {audit.implementedParameters?.capitalInvested > 0 && (
+                  {(audit.implementedParameters?.purchaseOutlay ?? audit.implementedParameters?.capitalInvested) > 0 && (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
                       <strong>Purchase Outlay:</strong>{' '}
                       <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>
-                        {formatCurrency(audit.implementedParameters?.capitalInvested)}
+                        {formatCurrency(audit.implementedParameters?.purchaseOutlay ?? audit.implementedParameters?.capitalInvested)}
                       </span>
                     </span>
                   )}
@@ -738,26 +771,13 @@ const DecisionAudit = () => {
                           {audit.implementationNotes ? audit.implementationNotes : 'No operational notes provided.'}
                           <br />
                           {audit.implementedParameters?.quantityOrdered > 0 && `• Order Qty: ${audit.implementedParameters.quantityOrdered} units`}
-                          {audit.implementedParameters?.costPrice > 0 && ` | Unit Cost: ${formatCurrency(audit.implementedParameters.costPrice)}`}
+                          {(audit.implementedParameters?.unitCost ?? audit.implementedParameters?.costPrice) > 0 &&
+                            ` | Unit Cost: ${formatCurrency(audit.implementedParameters?.unitCost ?? audit.implementedParameters?.costPrice)}`}
+                          {(audit.implementedParameters?.purchaseOutlay ?? audit.implementedParameters?.capitalInvested) > 0 &&
+                            ` | Purchase Outlay: ${formatCurrency(audit.implementedParameters?.purchaseOutlay ?? audit.implementedParameters?.capitalInvested)}`}
                           {audit.implementedParameters?.newPrice > 0 && ` | New Price: ${formatCurrency(audit.implementedParameters.newPrice)}`}
                         </div>
                       </div>
-                    </div>
-
-                    {/* Scientific Non-Causation Disclaimer */}
-                    <div
-                      style={{
-                        backgroundColor: '#fffbeb',
-                        border: '1px solid #fef3c7',
-                        borderRadius: '4px',
-                        padding: '0.65rem 0.85rem',
-                        color: '#92400e',
-                        fontSize: '0.75rem',
-                        lineHeight: 1.45,
-                        marginBottom: '0.75rem',
-                      }}
-                    >
-                      <strong>🔬 Observational Methodological Disclosure:</strong> {audit.evaluation?.empiricalVarianceDisclaimer}
                     </div>
 
                     {/* Audit History Trail */}
@@ -974,7 +994,7 @@ const DecisionAudit = () => {
                   <option value="">-- Store-Wide (No Single Product) --</option>
                   {productsList.map((p) => (
                     <option key={p._id} value={p._id}>
-                      {p.name} (SKU: {p.sku} | Price: {formatCurrency(p.sellingPrice)} | Stock: {p.stockQuantity})
+                      {p.name} (SKU: {p.sku} | Unit Cost: {formatCurrency(p.costPrice)} | Price: {formatCurrency(p.sellingPrice)} | Stock: {p.stockQuantity})
                     </option>
                   ))}
                 </select>
@@ -1050,14 +1070,14 @@ const DecisionAudit = () => {
                 {modalType === 'inventory_restock' && (
                   <div>
                     <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-                      Quantity Ordered:
+                      Quantity Ordered (units):
                     </label>
                     <input
                       type="number"
                       min="0"
                       value={modalQuantity}
                       onChange={(e) => setModalQuantity(e.target.value)}
-                      placeholder="e.g. 40"
+                      placeholder="e.g. 18"
                       style={{ width: '100%', padding: '0.45rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', color: 'var(--text-main)', fontSize: '0.85rem' }}
                     />
                   </div>
@@ -1065,7 +1085,7 @@ const DecisionAudit = () => {
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-                    Wholesale Cost ($):
+                    Unit Wholesale Cost (₹ / unit):
                   </label>
                   <input
                     type="number"
@@ -1073,15 +1093,37 @@ const DecisionAudit = () => {
                     min="0"
                     value={modalCostPrice}
                     onChange={(e) => setModalCostPrice(e.target.value)}
-                    placeholder="e.g. 2.50"
+                    placeholder="e.g. 18.00"
                     style={{ width: '100%', padding: '0.45rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', color: 'var(--text-main)', fontSize: '0.85rem' }}
                   />
                 </div>
 
+                {modalType === 'inventory_restock' && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                      Total Purchase Outlay (₹):
+                    </label>
+                    <div
+                      style={{
+                        width: '100%',
+                        padding: '0.45rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px dashed var(--border)',
+                        backgroundColor: '#f8fafc',
+                        color: 'var(--text-main)',
+                        fontSize: '0.85rem',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {formatCurrency((Number(modalQuantity) || 0) * (Number(modalCostPrice) || 0))}
+                    </div>
+                  </div>
+                )}
+
                 {(modalType === 'price_optimization' || modalType === 'promotional_discount') && (
                   <div>
                     <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-                      Applied Price ($):
+                      Applied Price (₹):
                     </label>
                     <input
                       type="number"
@@ -1148,38 +1190,6 @@ const DecisionAudit = () => {
           </div>
         </div>
       )}
-
-      {/* Algorithmic Methodology Panel */}
-      <div
-        style={{
-          marginTop: '3rem',
-          backgroundColor: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '1.5rem',
-        }}
-      >
-        <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 0.75rem 0' }}>
-          🧠 Closed-Loop Decision Intelligence Methodology
-        </h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.25rem', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.55 }}>
-          <div>
-            <strong style={{ color: 'var(--text-main)' }}>1. Non-Overlapping Window Alignment:</strong>
-            <br />
-            Evaluates pre-decision performance over [t_impl - k, t_impl - 1] and post-implementation performance over [t_impl + 1, t_impl + k]. The implementation day t_impl is strictly excluded from both windows to prevent intra-day operational contamination.
-          </div>
-          <div>
-            <strong style={{ color: 'var(--text-main)' }}>2. Defensible ROI Accounting:</strong>
-            <br />
-            ROI (%) = (Incremental Net Financial Benefit / Investment Outlay) * 100. Calculated strictly when an incremental capital outlay occurred (Investment &gt; 0). Price adjustments and clearance liquidations are reported via Delta Gross Profit and Capital Liquidated ($) with ROI returning N/A.
-          </div>
-          <div>
-            <strong style={{ color: 'var(--text-main)' }}>3. Observational Integrity:</strong>
-            <br />
-            Observed variances measure empirical before-and-after performance under real-world retail conditions. The system disclaims laboratory causation, noting external market dynamics, seasonality, and foot traffic.
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

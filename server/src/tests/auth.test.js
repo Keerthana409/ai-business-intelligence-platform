@@ -137,6 +137,46 @@ async function runAuthTests() {
     assert(resProfile.status === 200, 'Grants access to protected route with valid JWT (200)');
     assert(resProfile.body.data?.user?.email === testEmail, 'Protected route returns authenticated user data');
 
+    // Test 14: Register with "Grocery Store" and "Electronics Store" (and all 6 Shop Categories)
+    const sixCategories = [
+      'Grocery Store',
+      'Supermarket',
+      'Clothing & Fashion',
+      'Electronics Store',
+      'Pharmacy / Medical Store',
+      'Other',
+    ];
+    for (let i = 0; i < sixCategories.length; i++) {
+      const cat = sixCategories[i];
+      const catEmail = `test.cat.${i}@example.com`;
+      await User.deleteMany({ email: catEmail });
+      const resCat = await request(app).post('/api/auth/register').send({
+        name: `Owner ${i}`,
+        email: catEmail,
+        password: 'securePassword123',
+        confirmPassword: 'securePassword123',
+        businessName: `${cat} Demo`,
+        businessType: cat,
+      });
+      assert(
+        resCat.status === 201 && resCat.body.data?.user?.businessType === cat,
+        `Successfully registers with Shop Category "${cat}" and persists exact category`
+      );
+      await User.deleteMany({ email: catEmail });
+    }
+
+    // Test 15: Reject unsupported Shop Category
+    const resBadCategory = await request(app).post('/api/auth/register').send({
+      name: 'Invalid Category User',
+      email: 'invalid.cat@example.com',
+      password: 'securePassword123',
+      confirmPassword: 'securePassword123',
+      businessName: 'Invalid Shop',
+      businessType: 'Automobile Dealership',
+    });
+    assert(resBadCategory.status === 400, 'Rejects registration with unsupported Shop Category (400)');
+
+    await User.deleteMany({ email: testEmail });
     console.log(`\n📊 [SUMMARY]: ${passed} passed, ${failed} failed`);
   } catch (err) {
     console.error('❌ Test Execution Error:', err);

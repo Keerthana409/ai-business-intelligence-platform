@@ -141,20 +141,24 @@ export const runSimulation = async (req, res) => {
       }
 
       case 'inventory_reorder': {
+        const effectiveLeadTime = Math.max(
+          1,
+          Math.round(Number(leadTimeDays || product.leadTimeDays || 7))
+        );
         // Evaluate historical demand velocity from forecasting engine
         const demandRisk = evaluateProductDemandRisk({
           salesRecords: historicalSales.map((s) => ({ date: s.date, quantity: s.quantitySold })),
           stockQuantity: product.stockQuantity || 0,
           reorderThreshold: product.reorderThreshold || 10,
-          leadTimeDays: product.leadTimeDays || 7,
-          horizon: 14,
+          leadTimeDays: effectiveLeadTime,
+          horizon: 7,
         });
 
         simulationResult = simulateInventoryReorder({
           product,
           currentStock,
           proposedOrderQuantity,
-          leadTimeDays,
+          leadTimeDays: effectiveLeadTime,
           safetyStockTarget,
           historicalDemand: {
             hasSufficientData: demandRisk.hasSufficientData,

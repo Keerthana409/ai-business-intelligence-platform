@@ -89,7 +89,7 @@ const SalesOverTimeChart = ({
             boxShadow: metric === 'revenue' ? 'var(--shadow-sm)' : 'none',
           }}
         >
-          Revenue ($)
+          Revenue (₹)
         </button>
         <button
           onClick={() => setMetric('unitsSold')}
@@ -199,7 +199,7 @@ const SalesOverTimeChart = ({
             />
 
             <YAxis
-              tickFormatter={(val) => (metric === 'revenue' ? `$${val}` : formatNumber(val))}
+              tickFormatter={(val) => (metric === 'revenue' ? `₹${val}` : formatNumber(val))}
               tick={{ fill: '#64748b', fontSize: 11 }}
               axisLine={{ stroke: '#cbd5e1' }}
               tickLine={false}

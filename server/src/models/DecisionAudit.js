@@ -83,11 +83,13 @@ const decisionAuditSchema = new mongoose.Schema(
     },
     implementedParameters: {
       quantityOrdered: { type: Number, default: 0 },
-      costPrice: { type: Number, default: 0 },
+      unitCost: { type: Number, default: 0 }, // Per-unit wholesale cost ($/unit)
+      costPrice: { type: Number, default: 0 }, // Alias synced with unitCost for backward compatibility
       oldPrice: { type: Number, default: 0 },
       newPrice: { type: Number, default: 0 },
       discountPercent: { type: Number, default: 0 },
-      capitalInvested: { type: Number, default: 0 }, // Outlay: Q * costPrice
+      purchaseOutlay: { type: Number, default: 0 }, // Total order outlay: quantityOrdered * unitCost
+      capitalInvested: { type: Number, default: 0 }, // Alias synced with purchaseOutlay for backward compatibility
     },
 
     // Observation Window Configuration

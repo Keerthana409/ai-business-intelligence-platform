@@ -26,6 +26,7 @@ const Inventory = () => {
     sellingPrice: '',
     stockQuantity: '',
     reorderThreshold: '10',
+    leadTimeDays: '7',
     unit: 'pcs',
   });
   const [formErrors, setFormErrors] = useState({});
@@ -72,6 +73,7 @@ const Inventory = () => {
       sellingPrice: '',
       stockQuantity: '0',
       reorderThreshold: '10',
+      leadTimeDays: '7',
       unit: 'pcs',
     });
     setFormErrors({});
@@ -88,6 +90,7 @@ const Inventory = () => {
       sellingPrice: p.sellingPrice.toString(),
       stockQuantity: p.stockQuantity.toString(),
       reorderThreshold: p.reorderThreshold.toString(),
+      leadTimeDays: (p.leadTimeDays ?? 7).toString(),
       unit: p.unit || 'pcs',
     });
     setFormErrors({});
@@ -110,6 +113,12 @@ const Inventory = () => {
     if (modalForm.reorderThreshold === '' || isNaN(Number(modalForm.reorderThreshold)) || Number(modalForm.reorderThreshold) < 0) {
       errs.reorderThreshold = 'Valid reorder threshold required';
     }
+    if (
+      modalForm.leadTimeDays !== '' &&
+      (isNaN(Number(modalForm.leadTimeDays)) || Number(modalForm.leadTimeDays) < 1)
+    ) {
+      errs.leadTimeDays = 'Supplier lead time must be at least 1 day';
+    }
     setFormErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -129,6 +138,10 @@ const Inventory = () => {
         sellingPrice: Number(modalForm.sellingPrice),
         stockQuantity: Math.floor(Number(modalForm.stockQuantity)),
         reorderThreshold: Math.floor(Number(modalForm.reorderThreshold)),
+        leadTimeDays:
+          modalForm.leadTimeDays !== ''
+            ? Math.max(1, Math.round(Number(modalForm.leadTimeDays)))
+            : 7,
         unit: modalForm.unit.trim() || 'pcs',
       };
 
@@ -410,6 +423,7 @@ const Inventory = () => {
                   <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>Cost</th>
                   <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>Selling Price</th>
                   <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>Stock</th>
+                  <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>Lead Time</th>
                   <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>Status</th>
                   <th style={{ padding: '0.85rem 1rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -452,6 +466,9 @@ const Inventory = () => {
                       </td>
                       <td style={{ padding: '0.85rem 1rem', textAlign: 'center', fontWeight: 700, color: isLowStock ? 'var(--danger)' : 'var(--text-main)' }}>
                         {formatNumber(p.stockQuantity)} <span style={{ fontSize: '0.75rem', fontWeight: 400, color: 'var(--text-muted)' }}>{p.unit}</span>
+                      </td>
+                      <td style={{ padding: '0.85rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        {p.leadTimeDays ?? 7}d
                       </td>
                       <td style={{ padding: '0.85rem 1rem', textAlign: 'center' }}>
                         {isLowStock ? (
@@ -624,7 +641,7 @@ const Inventory = () => {
 
               <div className="form-row">
                 <div>
-                  <label className="form-label">Cost Price ($) *</label>
+                  <label className="form-label">Cost Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -637,7 +654,7 @@ const Inventory = () => {
                   {formErrors.costPrice && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{formErrors.costPrice}</span>}
                 </div>
                 <div>
-                  <label className="form-label">Selling Price ($) *</label>
+                  <label className="form-label">Selling Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -651,7 +668,7 @@ const Inventory = () => {
                 </div>
               </div>
 
-              <div className="form-row" style={{ marginBottom: '1.5rem' }}>
+              <div className="form-row">
                 <div>
                   <label className="form-label">Current Stock *</label>
                   <input
@@ -675,6 +692,21 @@ const Inventory = () => {
                     placeholder="10"
                   />
                   {formErrors.reorderThreshold && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{formErrors.reorderThreshold}</span>}
+                </div>
+              </div>
+
+              <div className="form-row" style={{ marginBottom: '1.5rem' }}>
+                <div>
+                  <label className="form-label">Supplier Lead Time (Days) *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={modalForm.leadTimeDays}
+                    onChange={(e) => setModalForm({ ...modalForm, leadTimeDays: e.target.value })}
+                    className={`form-input ${formErrors.leadTimeDays ? 'has-error' : ''}`}
+                    placeholder="7"
+                  />
+                  {formErrors.leadTimeDays && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{formErrors.leadTimeDays}</span>}
                 </div>
               </div>
 

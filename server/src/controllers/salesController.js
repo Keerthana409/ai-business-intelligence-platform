@@ -246,9 +246,9 @@ export const deleteSale = async (req, res) => {
 export const getSalesTemplate = (req, res) => {
   const templateCsv =
     'date,productName,quantity,unitPrice\n' +
-    '2026-10-01,Organic Whole Milk 1L,4,3.20\n' +
-    '2026-10-01,Cotton T-Shirt Blue,2,24.99\n' +
-    '2026-10-02,Basmati Rice 5kg,1,14.50\n';
+    '2026-10-01,Milk,4,30.00\n' +
+    '2026-10-01,Wheat Flour,2,50.00\n' +
+    '2026-10-02,Rice,1,80.00\n';
 
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="sales_template.csv"');
@@ -269,7 +269,13 @@ export const previewSalesCSV = async (req, res) => {
       });
     }
 
-    const validationResult = await parseAndValidateSalesCSV(req.file.buffer);
+    const knownProducts = req.user?.id
+      ? await Product.find({ userId: req.user.id }).select('name sku').lean()
+      : [];
+
+    const validationResult = await parseAndValidateSalesCSV(req.file.buffer, {
+      knownProducts,
+    });
 
     return res.status(200).json({
       status: 'success',

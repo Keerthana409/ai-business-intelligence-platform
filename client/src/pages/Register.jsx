@@ -2,6 +2,15 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+const SHOP_CATEGORIES = [
+  'Grocery Store',
+  'Supermarket',
+  'Clothing & Fashion',
+  'Electronics Store',
+  'Pharmacy / Medical Store',
+  'Other',
+];
+
 const Register = () => {
   const { registerUser } = useAuth();
   const navigate = useNavigate();
@@ -12,7 +21,7 @@ const Register = () => {
     password: '',
     confirmPassword: '',
     businessName: '',
-    businessType: 'grocery',
+    businessType: 'Grocery Store',
   });
 
   const [errors, setErrors] = useState({});
@@ -47,8 +56,8 @@ const Register = () => {
       newErrors.businessName = 'Shop name is required';
     }
 
-    if (!formData.businessType) {
-      newErrors.businessType = 'Please select a shop category';
+    if (!formData.businessType || !SHOP_CATEGORIES.includes(formData.businessType)) {
+      newErrors.businessType = 'Please select a valid shop category';
     }
 
     if (!formData.password) {
@@ -249,10 +258,17 @@ const Register = () => {
                   fontWeight: 500,
                 }}
               >
-                <option value="grocery" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>Grocery Store</option>
-                <option value="clothing" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>Clothing Shop</option>
-                <option value="supermarket" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>Supermarket</option>
+                {SHOP_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat} style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                    {cat}
+                  </option>
+                ))}
               </select>
+              {errors.businessType && (
+                <span style={{ color: 'var(--danger)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                  {errors.businessType}
+                </span>
+              )}
             </div>
           </div>
 

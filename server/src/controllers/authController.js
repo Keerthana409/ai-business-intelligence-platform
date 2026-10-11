@@ -63,13 +63,30 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // 6. Normalize category
-    let category = (businessType || 'grocery').toString().toLowerCase().trim();
-    const allowedCategories = ['grocery', 'clothing', 'supermarket', 'general_retail'];
-    if (!allowedCategories.includes(category)) {
+    // 6. Normalize and validate category (supports all 6 shop categories + legacy values)
+    const categoryNormalizationMap = {
+      'grocery store': 'Grocery Store',
+      grocery: 'Grocery Store',
+      supermarket: 'Supermarket',
+      'clothing & fashion': 'Clothing & Fashion',
+      'clothing shop': 'Clothing & Fashion',
+      clothing: 'Clothing & Fashion',
+      'electronics store': 'Electronics Store',
+      electronics: 'Electronics Store',
+      'pharmacy / medical store': 'Pharmacy / Medical Store',
+      pharmacy: 'Pharmacy / Medical Store',
+      'medical store': 'Pharmacy / Medical Store',
+      other: 'Other',
+      general_retail: 'general_retail',
+    };
+
+    const rawCategory = (businessType || 'Grocery Store').toString().trim().toLowerCase();
+    const category = categoryNormalizationMap[rawCategory];
+    if (!category) {
       return res.status(400).json({
         status: 'fail',
-        message: `Invalid shop category. Must be one of: Grocery, Clothing, Supermarket`,
+        message:
+          'Invalid shop category. Must be one of: Grocery Store, Supermarket, Clothing & Fashion, Electronics Store, Pharmacy / Medical Store, Other',
       });
     }
 

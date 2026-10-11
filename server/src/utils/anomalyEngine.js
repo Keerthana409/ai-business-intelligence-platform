@@ -323,9 +323,9 @@ export const detectDailyAnomalies = (rawOrAligned = [], options = {}) => {
       const pctOver = Number(
         (((rev - upperThreshold) / Math.max(1, upperThreshold)) * 100).toFixed(1)
       );
-      explanation = `Revenue of $${rev.toFixed(
+      explanation = `Revenue of ₹${rev.toFixed(
         2
-      )} exceeds normal upper limit ($${upperThreshold.toFixed(2)}) by +${pctOver}%.`;
+      )} exceeds normal upper limit (₹${upperThreshold.toFixed(2)}) by +${pctOver}%.`;
     }
     // 2. SUDDEN DROP DETECTION:
     // Only flag genuine drops relative to a verified prior trailing baseline.
@@ -345,9 +345,9 @@ export const detectDailyAnomalies = (rawOrAligned = [], options = {}) => {
         anomalyType = 'sales_drop';
         severity = dropPct >= 80 ? 'High' : dropPct >= 65 ? 'Medium' : 'Low';
         anomalyScore = Number((dropPct / 10).toFixed(2));
-        explanation = `Revenue of $${rev.toFixed(
+        explanation = `Revenue of ₹${rev.toFixed(
           2
-        )} represents a severe -${dropPct}% drop below the trailing 7-day median baseline of $${trailingMedian.toFixed(
+        )} represents a severe -${dropPct}% drop below the trailing 7-day median baseline of ₹${trailingMedian.toFixed(
           2
         )}.`;
       }
@@ -464,7 +464,7 @@ export const detectTransactionOutliers = (transactions = [], options = {}) => {
     const isOutlier = absScore >= outlierThreshold;
     let severity = null;
     let outlierType = null;
-    let explanation = 'Transaction is within normal statistical distribution.';
+    let explanation = 'Transaction is within normal historical sales range.';
 
     if (isOutlier) {
       severity = absScore >= extremeThreshold ? 'High' : absScore >= 4.0 ? 'Medium' : 'Low';
@@ -472,21 +472,23 @@ export const detectTransactionOutliers = (transactions = [], options = {}) => {
 
       if (score > 0) {
         const factorOver = median > 0 ? Number((amount / median).toFixed(1)) : 0;
-        explanation = `Transaction of $${amount.toFixed(
+        explanation = `Transaction of ₹${amount.toFixed(
           2
-        )} is unusually high (Modified Z-score: ${score.toFixed(
+        )} is unusually high (${
+          factorOver > 1 ? `${factorOver}x typical value, ` : ''
+        }deviation score: ${score.toFixed(
           2
-        )}, exceeds threshold ${outlierThreshold.toFixed(2)}${
-          factorOver > 1 ? `, ${factorOver}x median` : ''
-        }). Baseline median is $${median.toFixed(2)}.`;
+        )} vs. normal limit ${outlierThreshold.toFixed(
+          2
+        )}). Typical transaction value is ₹${median.toFixed(2)}.`;
       } else {
-        explanation = `Transaction of $${amount.toFixed(
+        explanation = `Transaction of ₹${amount.toFixed(
           2
-        )} is unusually low (Modified Z-score: ${score.toFixed(
+        )} is unusually low (deviation score: ${score.toFixed(
           2
-        )}, exceeds lower threshold -${outlierThreshold.toFixed(
+        )} vs. normal limit -${outlierThreshold.toFixed(
           2
-        )}). Baseline median is $${median.toFixed(2)}.`;
+        )}). Typical transaction value is ₹${median.toFixed(2)}.`;
       }
     }
 

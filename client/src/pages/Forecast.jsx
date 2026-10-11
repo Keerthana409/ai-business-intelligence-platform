@@ -120,10 +120,10 @@ const Forecast = () => {
                 Projected Revenue: {formatCurrency(pt.forecastRevenue)}
               </span>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-                Uncertainty Range: {formatCurrency(pt.lowerBound)} – {formatCurrency(pt.upperBound)}
+                Expected Range: {formatCurrency(pt.lowerBound)} – {formatCurrency(pt.upperBound)}
               </span>
               <span style={{ color: '#d97706', fontSize: '0.7rem' }}>
-                * ±{formatCurrency(pt.uncertaintyMargin)} empirical variance (not guaranteed)
+                ±{formatCurrency(pt.uncertaintyMargin)} typical daily variation
               </span>
             </div>
           )}
@@ -169,15 +169,31 @@ const Forecast = () => {
         }}
       >
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '1.5rem' }}>🤖</span>
             <h1 style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
               Predictive Sales & Demand Intelligence
             </h1>
+            {salesForecastData && (
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.65rem',
+                  borderRadius: '9999px',
+                  backgroundColor: salesForecastData?.mlMetadata?.mlActive ? '#dcfce7' : '#eff6ff',
+                  color: salesForecastData?.mlMetadata?.mlActive ? '#166534' : '#1d4ed8',
+                  border: `1px solid ${salesForecastData?.mlMetadata?.mlActive ? '#bbf7d0' : '#bfdbfe'}`,
+                }}
+              >
+                {salesForecastData?.mlMetadata?.mlActive
+                  ? '🧠 AI Trend & Demand Model'
+                  : '📐 Historical Trend Projection'}
+              </span>
+            )}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '680px' }}>
-            Deterministic machine learning using <strong>Holt's Linear Exponential Smoothing</strong> to project future revenue,
-            estimate SKU demand, and detect stockout risks before inventory runs out.
+            Projects upcoming store revenue, estimates daily product demand, and highlights items at risk of running out before supplier delivery.
           </p>
         </div>
 
@@ -254,7 +270,7 @@ const Forecast = () => {
 
       {loading ? (
         <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-          <p>Running statistical time-series forecasting engine...</p>
+          <p>Generating sales and inventory demand projections...</p>
         </div>
       ) : salesForecastData && !salesForecastData.hasSufficientData ? (
         /* Honest Insufficient Historical Data State */
@@ -274,7 +290,7 @@ const Forecast = () => {
             Insufficient Historical Data for Reliable Forecasting
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.925rem', maxWidth: '580px', margin: '0 auto 1.5rem', lineHeight: 1.5 }}>
-            {salesForecastData.explanation || 'At least 5 distinct calendar days with sales records are required as a minimal computational threshold for Holt\'s trend recursion.'}
+            At least 5 distinct calendar days with sales records are required to establish a reliable sales trend.
           </p>
 
           {/* Progress Tracker */}
@@ -357,11 +373,13 @@ const Forecast = () => {
                 {formatCurrency(salesForecastData?.totalProjectedRevenue || 0)}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                Model: Holt's Double Exponential Smoothing
+                {salesForecastData?.mlMetadata?.mlActive
+                  ? 'AI multi-factor revenue projection'
+                  : 'Historical trend-adjusted projection'}
               </p>
             </div>
 
-            {/* Backtest Normalized Accuracy */}
+            {/* Forecast Accuracy Score */}
             <div
               style={{
                 backgroundColor: 'var(--bg-card)',
@@ -372,7 +390,7 @@ const Forecast = () => {
               }}
             >
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Holdout Accuracy Score
+                Forecast Reliability Score
               </span>
               <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: 'var(--success)' }}>
                 {salesForecastData?.modelEvaluation?.normalizedAccuracy !== undefined
@@ -380,11 +398,11 @@ const Forecast = () => {
                   : 'N/A'}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                Based on holdout test backtest: 100 - WAPE
+                Validated against recent trading days
               </p>
             </div>
 
-            {/* Mean Absolute Error (MAE) */}
+            {/* Typical Daily Variance */}
             <div
               style={{
                 backgroundColor: 'var(--bg-card)',
@@ -395,7 +413,7 @@ const Forecast = () => {
               }}
             >
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Mean Absolute Error (MAE)
+                Average Daily Variance
               </span>
               <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: 'var(--text-main)' }}>
                 {salesForecastData?.modelEvaluation?.mae !== undefined
@@ -403,7 +421,7 @@ const Forecast = () => {
                   : 'N/A'}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                RMSE: {salesForecastData?.modelEvaluation?.rmse !== undefined ? formatCurrency(salesForecastData.modelEvaluation.rmse) : 'N/A'}
+                Typical daily difference on recent sales
               </p>
             </div>
 
@@ -445,7 +463,7 @@ const Forecast = () => {
                 Historical Sales vs {horizon}-Day Projected Revenue
               </h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem' }}>
-                Continuous chronological trajectory: blue line displays recorded sales receipts; purple line displays Holt's trend projection with approximate uncertainty band.
+                Continuous timeline: blue line displays recorded daily sales; purple line displays projected daily revenue with expected variance range.
               </p>
             </div>
 
@@ -465,7 +483,7 @@ const Forecast = () => {
                     dy={8}
                   />
                   <YAxis
-                    tickFormatter={(val) => `$${val}`}
+                    tickFormatter={(val) => `₹${val}`}
                     tick={{ fill: '#64748b', fontSize: 11 }}
                     axisLine={{ stroke: '#cbd5e1' }}
                     tickLine={false}
@@ -486,7 +504,7 @@ const Forecast = () => {
                     stroke="none"
                     fill="#ede9fe"
                     fillOpacity={0.6}
-                    name="Approximate Uncertainty Band"
+                    name="Expected Revenue Range"
                   />
 
                   {/* Historical Actual Line */}
@@ -496,7 +514,7 @@ const Forecast = () => {
                     stroke="#2563eb"
                     strokeWidth={2.5}
                     dot={{ r: 3, fill: '#2563eb' }}
-                    name="Actual Sales ($)"
+                    name="Actual Sales (₹)"
                     connectNulls={false}
                   />
 
@@ -513,106 +531,6 @@ const Forecast = () => {
                   />
                 </ComposedChart>
               </ResponsiveContainer>
-            </div>
-
-            <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.85rem', backgroundColor: '#f8fafc', borderRadius: 'var(--radius-sm)', border: '1px solid #e2e8f0', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              ℹ️ <strong>Forecast Disclaimer:</strong> Projections represent statistical extrapolations of historical sales velocity under the assumption that existing consumer trends persist. They do not constitute guaranteed future outcomes.
-            </div>
-          </section>
-
-          {/* Model Evaluation & Transparency Grid */}
-          <section
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-              gap: '1.5rem',
-              marginBottom: '2rem',
-            }}
-          >
-            {/* Model Evaluation Card */}
-            <div
-              style={{
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '1.5rem',
-                boxShadow: 'var(--shadow-sm)',
-              }}
-            >
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.4rem' }}>
-                📊 Chronological Backtest Evaluation
-              </h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '1rem', lineHeight: 1.45 }}>
-                Evaluated on historical holdout observations without future data leakage:
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', fontSize: '0.825rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.4rem', borderBottom: '1px solid #f1f5f9' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Mean Absolute Error (MAE):</span>
-                  <strong style={{ color: 'var(--text-main)' }}>
-                    {formatCurrency(salesForecastData?.modelEvaluation?.mae || 0)}
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.4rem', borderBottom: '1px solid #f1f5f9' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Root Mean Squared Error (RMSE):</span>
-                  <strong style={{ color: 'var(--text-main)' }}>
-                    {formatCurrency(salesForecastData?.modelEvaluation?.rmse || 0)}
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.4rem', borderBottom: '1px solid #f1f5f9' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Weighted Absolute Error (WAPE):</span>
-                  <strong style={{ color: 'var(--text-main)' }}>
-                    {salesForecastData?.modelEvaluation?.wape !== undefined ? `${salesForecastData.modelEvaluation.wape}%` : 'N/A'}
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '0.4rem', borderBottom: '1px solid #f1f5f9' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>Mean Absolute Pct Error (MAPE):</span>
-                  <strong style={{ color: 'var(--text-main)' }}>
-                    {salesForecastData?.modelEvaluation?.mape !== null ? `${salesForecastData.modelEvaluation.mape}%` : 'N/A'}
-                  </strong>
-                </div>
-                <p style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                  * {salesForecastData?.modelEvaluation?.mapeExplanation}
-                </p>
-              </div>
-            </div>
-
-            {/* Model Transparency & Limitations Card */}
-            <div
-              style={{
-                backgroundColor: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '1.5rem',
-                boxShadow: 'var(--shadow-sm)',
-              }}
-            >
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.4rem' }}>
-                🔍 Algorithm Transparency & Parameters
-              </h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.85rem' }}>
-                Mathematical specifications of the current predictive model:
-              </p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-main)' }}>
-                <p>
-                  <strong>Algorithm:</strong> {salesForecastData?.transparency?.algorithmName}
-                </p>
-                <p>
-                  <strong>Parameters:</strong> Level Smoothing (\u03b1 = {salesForecastData?.parameters?.alpha}), Trend Smoothing (\u03b2 = {salesForecastData?.parameters?.beta})
-                </p>
-                <p>
-                  <strong>Current Level:</strong> {formatCurrency(salesForecastData?.parameters?.finalLevel)} | <strong>Daily Trend Velocity:</strong> {formatCurrency(salesForecastData?.parameters?.finalTrend)}/day
-                </p>
-                <p>
-                  <strong>Historical Dataset Span:</strong> {salesForecastData?.historicalCoverage?.distinctRecordedDays} recorded trading days ({salesForecastData?.historicalCoverage?.totalCalendarDays} total calendar days)
-                </p>
-                <div style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.75rem', marginTop: '0.25rem' }}>
-                  <p style={{ fontSize: '0.725rem', color: '#b45309', lineHeight: 1.4 }}>
-                    ⚠️ <strong>Data Gate Note:</strong> {salesForecastData?.transparency?.minimumComputationalRequirementNote}
-                  </p>
-                </div>
-              </div>
             </div>
           </section>
 

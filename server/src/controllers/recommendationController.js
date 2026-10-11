@@ -12,6 +12,10 @@ import {
   generateCandidateRecommendations,
   resolveRecommendationConflicts,
 } from '../utils/recommendationEngine.js';
+import {
+  requestMLProductDemandForecast,
+  MIN_DAYS_FOR_PRODUCT_RF,
+} from '../services/mlServiceClient.js';
 
 /**
  * @desc    Get all active business recommendations for authenticated user
@@ -41,6 +45,72 @@ export const getRecommendations = async (req, res) => {
     // 3. Evaluate daily anomalies (Module 5 engine)
     const anomalyResult = detectDailyAnomalies(series, { sensitivity: 'standard' });
 
+    // 3B. Optional ML SKU demand velocity overrides when a product has >= 10 distinct sales days
+    const mlDemandOverrides = new Map();
+    const salesByProduct = new Map();
+    for (const s of sales) {
+      if (s.productId) {
+        const idKey = String(s.productId);
+        if (!salesByProduct.has(idKey)) salesByProduct.set(idKey, []);
+        salesByProduct.get(idKey).push(s);
+      }
+      const cleanName = (s.productName || '').trim().toLowerCase();
+      if (cleanName) {
+        const nameKey = `name_${cleanName}`;
+        if (!salesByProduct.has(nameKey)) salesByProduct.set(nameKey, []);
+        salesByProduct.get(nameKey).push(s);
+      }
+    }
+
+    const mlEligibleBatch = [];
+    for (const prod of products) {
+      const prodIdStr = String(prod._id);
+      const cleanNameKey = `name_${(prod.name || '').trim().toLowerCase()}`;
+      const directSales = salesByProduct.get(prodIdStr) || [];
+      const nameSales = salesByProduct.get(cleanNameKey) || [];
+      const seenIds = new Set();
+      const prodSales = [];
+      for (const s of [...directSales, ...nameSales]) {
+        const sid = s._id ? String(s._id) : s;
+        if (!seenIds.has(sid)) {
+          seenIds.add(sid);
+          prodSales.push(s);
+        }
+      }
+      if (prodSales.length >= MIN_DAYS_FOR_PRODUCT_RF) {
+        const { distinctRecordedDays: prodDays } = alignDailyTimeSeries(
+          prodSales.map((s) => ({ date: s.date, amount: s.quantitySold }))
+        );
+        if (prodDays >= MIN_DAYS_FOR_PRODUCT_RF) {
+          mlEligibleBatch.push({
+            productId: prodIdStr,
+            salesRecords: prodSales.map((s) => ({ date: s.date, quantity: s.quantitySold })),
+            stockQuantity: prod.stockQuantity,
+            reorderThreshold: prod.reorderThreshold,
+            leadTimeDays: prod.leadTimeDays || 7,
+          });
+        }
+      }
+    }
+
+    if (mlEligibleBatch.length > 0) {
+      const mlBatchRes = await requestMLProductDemandForecast({
+        products: mlEligibleBatch,
+        horizon: 7,
+      });
+      if (mlBatchRes.serviceOnline && mlBatchRes.data) {
+        for (const [pid, mlProd] of Object.entries(mlBatchRes.data)) {
+          if (mlProd && mlProd.mlUsed) {
+            mlDemandOverrides.set(pid, {
+              avgDailyDemand: mlProd.avgDailyDemand,
+              runoutDays: mlProd.runoutDays,
+              algorithm: 'AI Demand Forecast',
+            });
+          }
+        }
+      }
+    }
+
     // 4. Generate candidate recommendations (Module 6 engine)
     const rawCandidates = generateCandidateRecommendations({
       products,
@@ -48,6 +118,7 @@ export const getRecommendations = async (req, res) => {
       distinctStoreTradingDays: distinctRecordedDays,
       dailyAnomalyResult: anomalyResult,
       horizon: 14,
+      mlDemandOverrides,
     });
 
     // 5. Apply mutual exclusion and conflict resolution

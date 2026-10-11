@@ -368,12 +368,31 @@ export const evaluateProductDemandRisk = ({
   }
 
   const values = series.map((s) => s.value);
-  const { forecast } = calculateHoltLinear(values, horizon, 0.35, 0.1);
+  const safeHorizon = Math.max(1, Number(horizon) || 7);
+  const operationalLeadTime = Math.max(1, Number(leadTimeDays) || 7);
+
+  const { forecast } = calculateHoltLinear(values, safeHorizon, 0.35, 0.1);
+  const { forecast: leadTimeForecast } =
+    operationalLeadTime === safeHorizon
+      ? { forecast }
+      : calculateHoltLinear(values, operationalLeadTime, 0.35, 0.1);
 
   const totalProjectedDemand = Number(
     forecast.reduce((sum, v) => sum + v, 0).toFixed(1)
   );
-  const avgDailyDemand = Number((totalProjectedDemand / horizon).toFixed(2));
+  const rawLeadTimeTotal = Number(
+    leadTimeForecast.reduce((sum, v) => sum + v, 0).toFixed(1)
+  );
+  const avgDailyDemand = Number((rawLeadTimeTotal / operationalLeadTime).toFixed(2));
+
+  // Reorder quantity recommendation:
+  // Buffer needed to cover demand during supplier lead time + safety reorder threshold
+  const leadTimeDemand = Number((avgDailyDemand * operationalLeadTime).toFixed(1));
+  const targetStock = Math.ceil(reorderThreshold + leadTimeDemand);
+  const suggestedReorder =
+    stockQuantity <= reorderThreshold && avgDailyDemand <= 0
+      ? Math.max(1, reorderThreshold * 2 - stockQuantity)
+      : Math.max(0, Math.ceil(targetStock - stockQuantity));
 
   let runoutDays = null;
   let status = 'Low / Safe';
@@ -387,22 +406,19 @@ export const evaluateProductDemandRisk = ({
   } else {
     runoutDays = Number((stockQuantity / avgDailyDemand).toFixed(1));
 
-    if (runoutDays <= leadTimeDays || runoutDays <= 3) {
+    if (runoutDays <= operationalLeadTime || runoutDays <= 3) {
       status = 'Critical Risk';
-    } else if (runoutDays <= horizon || (stockQuantity - totalProjectedDemand) <= reorderThreshold) {
+    } else if (
+      runoutDays <= operationalLeadTime * 1.25 ||
+      stockQuantity - leadTimeDemand <= reorderThreshold
+    ) {
       status = 'High Risk';
-    } else if (runoutDays <= horizon * 1.5) {
+    } else if (runoutDays <= operationalLeadTime * 1.5) {
       status = 'Moderate Risk';
     } else {
       status = 'Low / Safe';
     }
   }
-
-  // Reorder quantity recommendation:
-  // Buffer needed to cover demand during supplier lead time + safety reorder threshold
-  const leadTimeDemand = Number((avgDailyDemand * leadTimeDays).toFixed(1));
-  const targetStock = reorderThreshold + leadTimeDemand;
-  const suggestedReorder = Math.max(0, Math.ceil(targetStock - stockQuantity));
 
   return {
     hasSufficientData: true,
@@ -413,8 +429,9 @@ export const evaluateProductDemandRisk = ({
     avgDailyDemand,
     stockQuantity,
     reorderThreshold,
-    leadTimeDays,
+    leadTimeDays: operationalLeadTime,
     leadTimeDemand,
+    targetStock,
     runoutDays,
     status,
     suggestedReorder,

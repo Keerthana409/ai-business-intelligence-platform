@@ -614,7 +614,7 @@ const Sales = () => {
                   {formErrors.quantitySold && <span style={{ color: 'var(--danger)', fontSize: '0.75rem' }}>{formErrors.quantitySold}</span>}
                 </div>
                 <div>
-                  <label className="form-label">Unit Selling Price ($) *</label>
+                  <label className="form-label">Unit Selling Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -643,7 +643,7 @@ const Sales = () => {
                   Calculated Total Revenue:
                 </span>
                 <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--primary)' }}>
-                  ${calculatedTotal}
+                  ₹{calculatedTotal}
                 </span>
               </div>
 

@@ -12,6 +12,7 @@ import {
   evaluateClearanceOutcome,
   evaluatePriceOptimizationOutcome,
   evaluateSimulationCalibration,
+  resolveUnitCostAndOutlay,
   roundCurrency,
 } from '../utils/auditEngine.js';
 
@@ -24,8 +25,10 @@ const computeAuditMetrics = async ({
   implementedAt,
   observationWindowDays,
   productId,
-  costPrice,
-  quantityOrdered,
+  unitCost = null,
+  costPrice = 0,
+  quantityOrdered = 0,
+  purchaseOutlay = null,
   scenarioSimulatedResults,
   scenarioHorizon,
   currentAuditDoc = null,
@@ -33,11 +36,29 @@ const computeAuditMetrics = async ({
   const windowConfig = calculateWindowDates(implementedAt, observationWindowDays);
   const maturation = checkWindowMaturation(implementedAt, observationWindowDays, new Date());
 
-  // Build sales query for the product (or store-wide if no product linked)
-  const salesQuery = { userId };
+  // Get current product stock and authoritative catalog unit cost
+  let currentStock = 0;
+  let catalogUnitCost = null;
   if (productId) {
-    salesQuery.productId = productId;
+    const prod = await Product.findOne({ _id: productId, userId });
+    if (prod) {
+      currentStock = prod.stockQuantity;
+      catalogUnitCost = prod.costPrice;
+    }
   }
+
+  // Resolve authoritative per-unit wholesale cost and single-multiplied purchase outlay
+  const resolvedCost = resolveUnitCostAndOutlay({
+    quantityOrdered,
+    submittedUnitCost: unitCost,
+    submittedCostPrice: costPrice,
+    catalogUnitCost,
+  });
+  const effectiveUnitCost = resolvedCost.unitCost;
+  const effectivePurchaseOutlay =
+    purchaseOutlay !== null && purchaseOutlay !== undefined && !isNaN(purchaseOutlay) && Number(purchaseOutlay) > 0 && !resolvedCost.wasTotalCostNormalized
+      ? roundCurrency(purchaseOutlay)
+      : resolvedCost.purchaseOutlay;
 
   // Retrieve sales spanning [preStart, postEnd]
   const salesRecords = await Sale.find({
@@ -49,12 +70,12 @@ const computeAuditMetrics = async ({
     },
   }).sort({ date: 1 });
 
-  // 1. Baseline metrics aggregation
+  // 1. Baseline metrics aggregation (Gross Profit = Revenue - COGS using per-unit wholesale cost)
   const baseline = aggregateWindowSales(
     salesRecords,
     windowConfig.preStart,
     windowConfig.preEnd,
-    costPrice
+    effectiveUnitCost
   );
 
   // 2. Post-decision metrics aggregation
@@ -63,17 +84,8 @@ const computeAuditMetrics = async ({
     salesRecords,
     windowConfig.postStart,
     windowConfig.postEnd,
-    costPrice
+    effectiveUnitCost
   );
-
-  // Get current product stock
-  let currentStock = 0;
-  if (productId) {
-    const prod = await Product.findOne({ _id: productId, userId });
-    if (prod) {
-      currentStock = prod.stockQuantity;
-    }
-  }
 
   // 3. Evaluate according to decisionType
   let evalResult;
@@ -82,7 +94,9 @@ const computeAuditMetrics = async ({
       preMetrics: baseline,
       postMetrics: post,
       quantityOrdered: Number(quantityOrdered) || 0,
-      costPrice: Number(costPrice) || 0,
+      unitCost: effectiveUnitCost,
+      costPrice: effectiveUnitCost,
+      purchaseOutlay: effectivePurchaseOutlay,
       currentStock,
       isMatured: maturation.isMatured,
     });
@@ -90,7 +104,7 @@ const computeAuditMetrics = async ({
     evalResult = evaluateClearanceOutcome({
       preMetrics: baseline,
       postMetrics: post,
-      costPrice: Number(costPrice) || 0,
+      costPrice: effectiveUnitCost,
       isMatured: maturation.isMatured,
     });
   } else {
@@ -124,6 +138,10 @@ const computeAuditMetrics = async ({
   return {
     windowConfig,
     maturation,
+    resolvedCost: {
+      unitCost: effectiveUnitCost,
+      purchaseOutlay: effectivePurchaseOutlay,
+    },
     baseline: {
       capturedAt: currentAuditDoc?.baselineMetrics?.capturedAt || new Date(),
       windowDays: windowConfig.windowDays,
@@ -242,24 +260,29 @@ export const implementDecision = async (req, res) => {
       }
     }
 
+    // Normalize productId in case a populated object was passed
+    const normalizedProductId =
+      productId && typeof productId === 'object' && productId._id
+        ? String(productId._id)
+        : productId;
+
     // Resolve Product attributes
     let targetProductId = null;
     let productName = '';
     let sku = '';
-    let costPrice = implementedParameters.costPrice !== undefined ? Number(implementedParameters.costPrice) : 0;
+    let catalogUnitCost = null;
+    let recommendationUnitCost = null;
 
-    if (productId) {
-      if (!mongoose.Types.ObjectId.isValid(productId)) {
+    if (normalizedProductId) {
+      if (!mongoose.Types.ObjectId.isValid(normalizedProductId)) {
         return res.status(400).json({ status: 'fail', message: 'Invalid product ID' });
       }
-      const product = await Product.findOne({ _id: productId, userId: userObjectId });
+      const product = await Product.findOne({ _id: normalizedProductId, userId: userObjectId });
       if (product) {
         targetProductId = product._id;
         productName = product.name;
         sku = product.sku;
-        if (costPrice === 0 && product.costPrice !== undefined) {
-          costPrice = product.costPrice;
-        }
+        catalogUnitCost = product.costPrice;
       }
     }
 
@@ -267,13 +290,16 @@ export const implementDecision = async (req, res) => {
     if (recommendationId) {
       const rec = await Recommendation.findOne({ _id: recommendationId, userId: userObjectId });
       if (rec) {
+        if (rec.evidence?.unitCost !== undefined) {
+          recommendationUnitCost = Number(rec.evidence.unitCost);
+        }
         if (!targetProductId && rec.productId) {
           targetProductId = rec.productId;
           const prod = await Product.findOne({ _id: rec.productId, userId: userObjectId });
           if (prod) {
             productName = prod.name;
             sku = prod.sku;
-            if (costPrice === 0) costPrice = prod.costPrice;
+            catalogUnitCost = prod.costPrice;
           }
         }
         // Link outcomeTracking in Recommendation without breaking existing schema
@@ -301,27 +327,46 @@ export const implementDecision = async (req, res) => {
         if (!targetProductId && scenario.productId) {
           targetProductId = scenario.productId;
           productName = scenario.productName || productName;
+          const prod = await Product.findOne({ _id: scenario.productId, userId: userObjectId });
+          if (prod) {
+            productName = prod.name || productName;
+            sku = prod.sku || sku;
+            catalogUnitCost = prod.costPrice;
+          }
         }
       }
     }
 
     const quantityOrdered = Number(implementedParameters.quantityOrdered) || 0;
-    const capitalInvested = roundCurrency(quantityOrdered * costPrice);
+    const {
+      unitCost,
+      costPrice,
+      purchaseOutlay,
+      capitalInvested,
+    } = resolveUnitCostAndOutlay({
+      quantityOrdered,
+      submittedUnitCost: implementedParameters.unitCost,
+      submittedCostPrice: implementedParameters.costPrice,
+      catalogUnitCost,
+      recommendationUnitCost,
+    });
 
-    // Compute initial baseline and window metrics
+    // Compute initial baseline and window metrics using per-unit wholesale cost
     const metricsResult = await computeAuditMetrics({
       userId: userObjectId,
       decisionType,
       implementedAt: implDate,
       observationWindowDays: windowDays,
       productId: targetProductId,
+      unitCost,
       costPrice,
       quantityOrdered,
+      purchaseOutlay,
       scenarioSimulatedResults,
       scenarioHorizon,
     });
 
-    // Create Audit document
+    // Create Audit document with unitCost and purchaseOutlay stored separately
     const audit = await DecisionAudit.create({
       userId: userObjectId,
       decisionSource,
@@ -338,7 +383,9 @@ export const implementDecision = async (req, res) => {
       implementedParameters: {
         ...implementedParameters,
         quantityOrdered,
+        unitCost,
         costPrice,
+        purchaseOutlay,
         capitalInvested,
       },
       observationWindowDays: windowDays,
@@ -426,8 +473,16 @@ export const getAudits = async (req, res) => {
           audit.observationWindowDays,
           new Date()
         );
+        const needsCostNormalization =
+          audit.decisionType === 'inventory_restock' &&
+          (audit.implementedParameters?.unitCost === null ||
+            audit.implementedParameters?.unitCost === undefined);
 
-        if (maturation.isMatured || maturation.daysElapsed !== audit.postMetrics?.daysElapsed) {
+        if (
+          maturation.isMatured ||
+          maturation.daysElapsed !== audit.postMetrics?.daysElapsed ||
+          needsCostNormalization
+        ) {
           try {
             const scenarioSimulated = audit.scenarioId
               ? (await Scenario.findOne({ _id: audit.scenarioId, userId: userObjectId }))?.simulatedResults
@@ -439,18 +494,29 @@ export const getAudits = async (req, res) => {
               implementedAt: audit.implementedAt,
               observationWindowDays: audit.observationWindowDays,
               productId: audit.productId,
+              unitCost: audit.implementedParameters?.unitCost ?? null,
               costPrice: audit.implementedParameters?.costPrice || 0,
               quantityOrdered: audit.implementedParameters?.quantityOrdered || 0,
+              purchaseOutlay: audit.implementedParameters?.purchaseOutlay ?? null,
               scenarioSimulatedResults: scenarioSimulated,
               currentAuditDoc: audit,
             });
 
+            audit.baselineMetrics = refreshed.baseline;
             audit.postMetrics = refreshed.post;
+            if (refreshed.resolvedCost) {
+              audit.implementedParameters.unitCost = refreshed.resolvedCost.unitCost;
+              audit.implementedParameters.costPrice = refreshed.resolvedCost.unitCost;
+              audit.implementedParameters.purchaseOutlay = refreshed.resolvedCost.purchaseOutlay;
+              audit.implementedParameters.capitalInvested = refreshed.resolvedCost.purchaseOutlay;
+            }
             audit.evaluation.status = refreshed.evalResult.status;
             audit.evaluation.outcomeRating = refreshed.evalResult.outcomeRating;
             audit.evaluation.headline = refreshed.evalResult.headline;
             audit.evaluation.stockoutAverted = refreshed.evalResult.stockoutAverted;
             audit.evaluation.deadCapitalRecovered = refreshed.evalResult.deadCapitalRecovered;
+            audit.evaluation.investmentCost = refreshed.evalResult.investmentCost;
+            audit.evaluation.capitalValueSold = refreshed.evalResult.capitalValueSold;
             audit.evaluation.deltaRevenue = refreshed.evalResult.deltaRevenue;
             audit.evaluation.deltaUnits = refreshed.evalResult.deltaUnits;
             audit.evaluation.deltaGrossProfit = refreshed.evalResult.deltaGrossProfit;
@@ -473,7 +539,24 @@ export const getAudits = async (req, res) => {
           }
         }
       }
-      refreshedAudits.push(audit);
+      const auditObj = audit.toObject ? audit.toObject() : { ...audit };
+      if (
+        auditObj.decisionType === 'inventory_restock' &&
+        auditObj.evaluation?.stockoutAverted === false &&
+        Number(auditObj.postMetrics?.distinctTradingDays || 0) === 0 &&
+        Number(auditObj.postMetrics?.totalUnitsSold || 0) === 0 &&
+        Number(auditObj.postMetrics?.currentStock ?? 1) > 0
+      ) {
+        auditObj.evaluation = {
+          ...auditObj.evaluation,
+          stockoutAverted: null,
+          headline:
+            auditObj.evaluation.status === 'in_observation'
+              ? 'Pending post-decision trading data to evaluate stockout prevention and financial impact.'
+              : auditObj.evaluation.headline,
+        };
+      }
+      refreshedAudits.push(auditObj);
     }
 
     return res.status(200).json({
@@ -509,9 +592,27 @@ export const getAuditById = async (req, res) => {
       return res.status(404).json({ status: 'fail', message: 'Decision audit not found' });
     }
 
+    const auditObj = audit.toObject ? audit.toObject() : { ...audit };
+    if (
+      auditObj.decisionType === 'inventory_restock' &&
+      auditObj.evaluation?.stockoutAverted === false &&
+      Number(auditObj.postMetrics?.distinctTradingDays || 0) === 0 &&
+      Number(auditObj.postMetrics?.totalUnitsSold || 0) === 0 &&
+      Number(auditObj.postMetrics?.currentStock ?? 1) > 0
+    ) {
+      auditObj.evaluation = {
+        ...auditObj.evaluation,
+        stockoutAverted: null,
+        headline:
+          auditObj.evaluation.status === 'in_observation'
+            ? 'Pending post-decision trading data to evaluate stockout prevention and financial impact.'
+            : auditObj.evaluation.headline,
+      };
+    }
+
     return res.status(200).json({
       status: 'success',
-      data: { audit },
+      data: { audit: auditObj },
     });
   } catch (error) {
     console.error('[Get Audit By ID Error]:', error);
@@ -638,19 +739,29 @@ export const recalculateAudit = async (req, res) => {
       implementedAt: audit.implementedAt,
       observationWindowDays: audit.observationWindowDays,
       productId: audit.productId,
+      unitCost: audit.implementedParameters?.unitCost ?? null,
       costPrice: audit.implementedParameters?.costPrice || 0,
       quantityOrdered: audit.implementedParameters?.quantityOrdered || 0,
+      purchaseOutlay: audit.implementedParameters?.purchaseOutlay ?? null,
       scenarioSimulatedResults: scenarioSimulated,
       currentAuditDoc: audit,
     });
 
     audit.baselineMetrics = refreshed.baseline;
     audit.postMetrics = refreshed.post;
+    if (refreshed.resolvedCost) {
+      audit.implementedParameters.unitCost = refreshed.resolvedCost.unitCost;
+      audit.implementedParameters.costPrice = refreshed.resolvedCost.unitCost;
+      audit.implementedParameters.purchaseOutlay = refreshed.resolvedCost.purchaseOutlay;
+      audit.implementedParameters.capitalInvested = refreshed.resolvedCost.purchaseOutlay;
+    }
     audit.evaluation.status = refreshed.evalResult.status;
     audit.evaluation.outcomeRating = refreshed.evalResult.outcomeRating;
     audit.evaluation.headline = refreshed.evalResult.headline;
     audit.evaluation.stockoutAverted = refreshed.evalResult.stockoutAverted;
     audit.evaluation.deadCapitalRecovered = refreshed.evalResult.deadCapitalRecovered;
+    audit.evaluation.investmentCost = refreshed.evalResult.investmentCost;
+    audit.evaluation.capitalValueSold = refreshed.evalResult.capitalValueSold;
     audit.evaluation.deltaRevenue = refreshed.evalResult.deltaRevenue;
     audit.evaluation.deltaUnits = refreshed.evalResult.deltaUnits;
     audit.evaluation.deltaGrossProfit = refreshed.evalResult.deltaGrossProfit;

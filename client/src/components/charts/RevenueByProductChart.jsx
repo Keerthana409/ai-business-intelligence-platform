@@ -98,7 +98,7 @@ const RevenueByProductChart = ({ data = [], loading = false, error = null }) => 
               interval={0}
             />
             <YAxis
-              tickFormatter={(val) => `$${val}`}
+              tickFormatter={(val) => `₹${val}`}
               tick={{ fill: '#64748b', fontSize: 11 }}
               axisLine={{ stroke: '#cbd5e1' }}
               tickLine={false}

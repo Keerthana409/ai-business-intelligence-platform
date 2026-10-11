@@ -156,23 +156,9 @@ const Recommendations = () => {
             <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
               Business Recommendations & Decision Support
             </h1>
-            <span
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                backgroundColor: '#fef3c7',
-                color: '#92400e',
-                border: '1px solid #fde68a',
-                padding: '0.2rem 0.6rem',
-                borderRadius: '9999px',
-              }}
-            >
-              Module 6
-            </span>
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '800px', lineHeight: 1.5 }}>
-            Deterministic decision rules, lead-time reorder calculations, slow-moving capital recovery, and anomaly follow-ups.
-            Every recommendation is grounded in verified historical data with concrete evidence.
+            Actionable restock guidance, supplier lead-time reorder quantities, slow-moving inventory recovery, and sales trend follow-ups backed by store sales data.
           </p>
         </div>
 
@@ -593,7 +579,7 @@ const Recommendations = () => {
                     }}
                   >
                     <h4 style={{ fontSize: '0.825rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.6rem', textTransform: 'uppercase' }}>
-                      Empirical Evidence & Mathematical Factors
+                      Supporting Evidence & Key Metrics
                     </h4>
 
                     {/* Factors Grid */}
@@ -792,7 +778,7 @@ const Recommendations = () => {
                   Purchase Order Draft Preview
                 </h3>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  Internal replenishment draft based on deterministic reorder rules
+                  Internal replenishment draft based on inventory reorder analysis
                 </span>
               </div>
               <button
@@ -886,66 +872,6 @@ const Recommendations = () => {
           </div>
         </div>
       )}
-
-      {/* Methodology & Algorithmic Transparency Box */}
-      <section>
-        <div
-          style={{
-            backgroundColor: 'var(--bg-card)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '1.5rem',
-            boxShadow: 'var(--shadow-sm)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '1.25rem' }}>📐</span>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>
-              Deterministic Decision Rules & Methodology
-            </h3>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: '1.25rem',
-              fontSize: '0.825rem',
-              color: 'var(--text-muted)',
-              lineHeight: 1.55,
-            }}
-          >
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                1. Lead-Time Reorder Buffer Model
-              </strong>
-              Target stock is calculated as <code>ReorderThreshold + (AvgDailyDemand &times; LeadTimeDays)</code>.
-              When sales history is insufficient (&lt; 3 days), a transparent catalog threshold buffer of <code>2 &times; ReorderThreshold - Stock</code> is used.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                2. Stagnant Velocity &amp; Capital-at-Risk Floor
-              </strong>
-              To prevent flagging fast-moving high-value goods, slow movers must satisfy stock &gt; 2&times; threshold, runout &gt; 90 days (or &le; 1 unit sold in 30 days), and have &ge; $50 tied up in excess inventory.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                3. Split-Window Sales Decline Detection
-              </strong>
-              Evaluates consecutive 7-day chronological periods (t-14 to t-8 vs t-7 to t-1). Triggered only when baseline sales were &ge; 5 units across &ge; 2 distinct days and demand dropped by &ge; 40%.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                4. Mutual Exclusion &amp; Conflict Resolution
-              </strong>
-              Restock alerts and overstock alerts are mutually exclusive for the same product. Out-of-stock items take absolute precedence over sales decline alerts.
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   );
 };

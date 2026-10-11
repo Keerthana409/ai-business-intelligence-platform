@@ -156,28 +156,41 @@ const Anomalies = () => {
         }}
       >
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '1.75rem' }}>🚨</span>
             <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
               Anomaly Detection & Volatility Studio
             </h1>
-            <span
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                backgroundColor: '#fef2f2',
-                color: '#b91c1c',
-                border: '1px solid #fecaca',
-                padding: '0.2rem 0.6rem',
-                borderRadius: '9999px',
-              }}
-            >
-              Module 5
-            </span>
+            {(transactionData || dailyData) && (
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.65rem',
+                  borderRadius: '9999px',
+                  backgroundColor:
+                    transactionData?.mlMetadata?.mlActive || dailyData?.mlMetadata?.mlActive
+                      ? '#dcfce7'
+                      : '#eff6ff',
+                  color:
+                    transactionData?.mlMetadata?.mlActive || dailyData?.mlMetadata?.mlActive
+                      ? '#166534'
+                      : '#1d4ed8',
+                  border: `1px solid ${
+                    transactionData?.mlMetadata?.mlActive || dailyData?.mlMetadata?.mlActive
+                      ? '#bbf7d0'
+                      : '#bfdbfe'
+                  }`,
+                }}
+              >
+                {transactionData?.mlMetadata?.mlActive || dailyData?.mlMetadata?.mlActive
+                  ? '🧠 AI Anomaly Detection'
+                  : '📐 Sales Baseline & Outlier Monitor'}
+              </span>
+            )}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '800px', lineHeight: 1.5 }}>
-            Empirical non-parametric Interquartile Range (IQR) corridors and Boris Iglewicz–David Hoaglin Modified Z-score outlier analysis.
-            Detects unexpected surges, severe revenue collapses, and transaction receipt anomalies.
+            Automatically monitors daily store revenue and individual sales receipts to flag unusual spikes, sudden revenue drops, and atypical transactions.
           </p>
         </div>
 
@@ -204,7 +217,7 @@ const Anomalies = () => {
                 fontSize: '0.8rem',
                 cursor: 'pointer',
               }}
-              title="Sensitive: k = 1.2 * IQR (Flags milder deviations)"
+              title="Sensitive: Flags milder daily revenue deviations"
             >
               Sensitive (1.2×)
             </button>
@@ -220,7 +233,7 @@ const Anomalies = () => {
                 fontSize: '0.8rem',
                 cursor: 'pointer',
               }}
-              title="Standard: k = 1.5 * IQR (Tukey's standard rule)"
+              title="Standard: Balanced threshold for unusual daily sales"
             >
               Standard (1.5×)
             </button>
@@ -236,7 +249,7 @@ const Anomalies = () => {
                 fontSize: '0.8rem',
                 cursor: 'pointer',
               }}
-              title="Conservative: k = 2.0 * IQR (Flags only extreme deviations)"
+              title="Conservative: Flags only extreme daily deviations"
             >
               Conservative (2.0×)
             </button>
@@ -332,7 +345,7 @@ const Anomalies = () => {
             {formatNumber(dailyData?.summary?.spikesCount || 0)}
           </h2>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-            Surpassed upper IQR corridor threshold
+            Above normal daily sales range
           </p>
         </div>
 
@@ -356,7 +369,7 @@ const Anomalies = () => {
             {formatNumber(dailyData?.summary?.dropsCount || 0)}
           </h2>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-            &ge;50% drop below 7-day trailing median
+            &ge;50% drop below recent 7-day baseline
           </p>
         </div>
 
@@ -380,7 +393,7 @@ const Anomalies = () => {
             {formatNumber(transactionData?.summary?.totalOutliers || 0)}
           </h2>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-            |Modified Z-Score| &ge; 3.50 (MAD)
+            Unusually large or small transactions
           </p>
         </div>
       </div>
@@ -400,7 +413,7 @@ const Anomalies = () => {
         >
           <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>⏳</span>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-main)' }}>
-            Empirical Baseline Requires More Trading History
+            Baseline Requires More Trading History
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '650px', margin: '0 auto 1.5rem', lineHeight: 1.5 }}>
             {dailyData.message}
@@ -472,16 +485,15 @@ const Anomalies = () => {
                   Daily Revenue Anomaly Corridor & Trailing Baseline
                 </h2>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', marginTop: '0.2rem' }}>
-                  Blue line represents actual sales. Grey dashed lines define normal IQR corridor [Q1 - {dailyData?.kMultiplier}×IQR, Q3 + {dailyData?.kMultiplier}×IQR].
+                  Blue line represents actual daily sales. Grey dashed lines define the expected daily revenue corridor.
                 </p>
               </div>
 
               {dailyData?.quartiles && (
                 <div style={{ display: 'flex', gap: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  <span>Q1: <strong>{formatCurrency(dailyData.quartiles.q1)}</strong></span>
+                  <span>25th Pct: <strong>{formatCurrency(dailyData.quartiles.q1)}</strong></span>
                   <span>Median: <strong>{formatCurrency(dailyData.quartiles.median)}</strong></span>
-                  <span>Q3: <strong>{formatCurrency(dailyData.quartiles.q3)}</strong></span>
-                  <span>IQR: <strong>{formatCurrency(dailyData.quartiles.iqr)}</strong></span>
+                  <span>75th Pct: <strong>{formatCurrency(dailyData.quartiles.q3)}</strong></span>
                 </div>
               )}
             </div>
@@ -502,7 +514,7 @@ const Anomalies = () => {
                   <YAxis
                     stroke="var(--text-muted)"
                     fontSize={12}
-                    tickFormatter={(v) => `$${v}`}
+                    tickFormatter={(v) => `₹${v}`}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ paddingTop: '10px' }} />
@@ -511,7 +523,7 @@ const Anomalies = () => {
                   <Line
                     type="monotone"
                     dataKey="upperThreshold"
-                    name={`Upper Corridor (${dailyData?.kMultiplier}×IQR)`}
+                    name="Upper Normal Limit"
                     stroke="#94a3b8"
                     strokeDasharray="4 4"
                     strokeWidth={1.5}
@@ -520,7 +532,7 @@ const Anomalies = () => {
                   <Line
                     type="monotone"
                     dataKey="lowerThreshold"
-                    name={`Lower Corridor`}
+                    name="Lower Normal Limit"
                     stroke="#94a3b8"
                     strokeDasharray="4 4"
                     strokeWidth={1.5}
@@ -659,9 +671,9 @@ const Anomalies = () => {
                     <th style={{ padding: '0.75rem 0.5rem' }}>Type</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Actual Revenue</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Corridor / Baseline</th>
-                    <th style={{ padding: '0.75rem 0.5rem' }}>Anomaly Score</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Deviation Score</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Severity</th>
-                    <th style={{ padding: '0.75rem 0.5rem' }}>Deterministic Explanation</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Explanation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -722,25 +734,20 @@ const Anomalies = () => {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '1.25rem' }}>🧾</span>
                 <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>
                   Transaction-Level Outlier Analysis
                 </h2>
               </div>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.825rem', marginTop: '0.2rem' }}>
-                Evaluated with Boris Iglewicz and David Hoaglin Modified Z-Score using Median Absolute Deviation (MAD).
-                Standard statistical threshold is |M<sub>i</sub>| &ge; 3.50.
+                Identifies individual sales receipts with unusually high or low revenue, quantity, or pricing compared to typical store transactions.
               </p>
             </div>
 
             {transactionData?.statistics && (
               <div style={{ display: 'flex', gap: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                <span>Median Receipt: <strong>{formatCurrency(transactionData.statistics.median)}</strong></span>
-                <span>MAD: <strong>{formatCurrency(transactionData.statistics.mad)}</strong></span>
-                {transactionData.statistics.meanAD > 0 && (
-                  <span>MeanAD: <strong>{formatCurrency(transactionData.statistics.meanAD)}</strong></span>
-                )}
+                <span>Typical Receipt (Median): <strong>{formatCurrency(transactionData.statistics.median)}</strong></span>
               </div>
             )}
           </div>
@@ -754,7 +761,7 @@ const Anomalies = () => {
               <span style={{ fontSize: '2rem', display: 'block', marginBottom: '0.5rem' }}>✅</span>
               <p style={{ fontWeight: 600 }}>No transaction outliers detected.</p>
               <p style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                All {transactionData?.totalTransactions || 0} evaluated transactions sit safely within normal statistical dispersion (|M<sub>i</sub>| &lt; 3.50).
+                All {transactionData?.totalTransactions || 0} evaluated transactions fall within the normal store range.
               </p>
             </div>
           ) : (
@@ -768,9 +775,9 @@ const Anomalies = () => {
                     <th style={{ padding: '0.75rem 0.5rem' }}>Unit Price</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Receipt Total</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Payment</th>
-                    <th style={{ padding: '0.75rem 0.5rem' }}>Modified Z-Score</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Outlier Score</th>
                     <th style={{ padding: '0.75rem 0.5rem' }}>Severity</th>
-                    <th style={{ padding: '0.75rem 0.5rem' }}>Plain-English Explanation</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Explanation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -815,70 +822,6 @@ const Anomalies = () => {
               </table>
             </div>
           )}
-        </div>
-      </section>
-
-      {/* Statistical Methodology & Mathematical Transparency Card */}
-      <section>
-        <div
-          style={{
-            backgroundColor: 'var(--bg-card)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '1.5rem',
-            boxShadow: 'var(--shadow-sm)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '1.25rem' }}>📐</span>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>
-              Deterministic Statistical Methodology & Algorithms
-            </h3>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: '1.25rem',
-              fontSize: '0.825rem',
-              color: 'var(--text-muted)',
-              lineHeight: 1.55,
-            }}
-          >
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                1. Continuous NIST Type 7 Quantile Interpolation
-              </strong>
-              Calculates Q1 (25th percentile), Median (50th percentile), and Q3 (75th percentile) using standard NIST Type 7 linear interpolation.
-              Ensures exact non-parametric quantile estimation regardless of sample parity.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                2. Non-Parametric IQR Corridors
-              </strong>
-              Daily boundaries are formed as [Q1 - k×IQR, Q3 + k×IQR]. Standard mode sets k = 1.5, sensitive k = 1.2, and conservative k = 2.0.
-              Includes an automatic safe floor of max($1.00, 5% of median) when sales series variance is zero.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                3. Temporal Separation & Trailing Baselines
-              </strong>
-              For any target day t, the trailing median baseline strictly evaluates days t-7 through t-1.
-              Target day t is completely excluded from its own baseline to avoid self-contamination.
-              Unrecorded calendar dates are never flagged as sudden drops.
-            </div>
-
-            <div>
-              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.25rem' }}>
-                4. Boris Iglewicz & David Hoaglin Modified Z-Scores
-              </strong>
-              Individual receipt outlier detection uses M<sub>i</sub> = 0.6745 × (x<sub>i</sub> - Median) / MAD.
-              If &gt;50% of receipts are identical (MAD = 0), the engine switches to Mean Absolute Deviation (MeanAD) fallback with coefficient 0.7979.
-            </div>
-          </div>
         </div>
       </section>
     </div>

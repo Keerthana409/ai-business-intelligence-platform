@@ -385,6 +385,60 @@ const UploadData = () => {
             </div>
           </div>
 
+          {/* Column Mapping Summary (if available) */}
+          {previewData.columnMapping?.length > 0 && (
+            <div style={{
+              backgroundColor: '#f8fafc',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '0.75rem 1rem',
+              marginBottom: '1rem',
+              fontSize: '0.8rem',
+            }}>
+              <strong style={{ color: 'var(--text-main)', display: 'block', marginBottom: '0.35rem' }}>
+                🔗 Detected CSV Column Mapping:
+              </strong>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {previewData.columnMapping.map((col, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      backgroundColor: col.wasAliased ? '#eff6ff' : '#ffffff',
+                      border: `1px solid ${col.wasAliased ? '#bfdbfe' : 'var(--border)'}`,
+                      color: col.wasAliased ? '#1e40af' : 'var(--text-main)',
+                      padding: '0.2rem 0.55rem',
+                      borderRadius: '4px',
+                      fontFamily: 'monospace',
+                      fontSize: '0.75rem',
+                    }}
+                  >
+                    {col.originalHeader} &rarr; <strong>{col.mappedTo}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Unknown Product Warnings Box (if any) */}
+          {previewData.warnings?.length > 0 && (
+            <div style={{
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: 'var(--radius-sm)',
+              padding: '0.85rem 1rem',
+              marginBottom: '1.25rem',
+              color: '#92400e',
+              fontSize: '0.82rem',
+            }}>
+              <strong style={{ display: 'block', marginBottom: '0.25rem' }}>
+                ⚠️ Catalog Matching Notice:
+              </strong>
+              {previewData.warnings.map((w, idx) => (
+                <div key={idx}>{w}</div>
+              ))}
+            </div>
+          )}
+
           {/* Validation Errors Box (if any) */}
           {previewData.invalidRows?.length > 0 && (
             <div style={{
@@ -444,6 +498,7 @@ const UploadData = () => {
                         <th style={{ padding: '0.6rem 0.85rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>Cost</th>
                         <th style={{ padding: '0.6rem 0.85rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'right' }}>Price</th>
                         <th style={{ padding: '0.6rem 0.85rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>Stock</th>
+                        <th style={{ padding: '0.6rem 0.85rem', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>Lead Time</th>
                       </>
                     )}
                   </tr>
@@ -455,7 +510,24 @@ const UploadData = () => {
                       {activeTab === 'sales' ? (
                         <>
                           <td style={{ padding: '0.6rem 0.85rem' }}>{formatDate(row.date)}</td>
-                          <td style={{ padding: '0.6rem 0.85rem', fontWeight: 600 }}>{row.productName}</td>
+                          <td style={{ padding: '0.6rem 0.85rem', fontWeight: 600 }}>
+                            {row.productName}
+                            {row.isKnownProduct === false && (
+                              <span
+                                style={{
+                                  marginLeft: '0.4rem',
+                                  fontSize: '0.7rem',
+                                  padding: '0.1rem 0.4rem',
+                                  borderRadius: '4px',
+                                  backgroundColor: '#fef3c7',
+                                  color: '#92400e',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Unknown Product
+                              </span>
+                            )}
+                          </td>
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'center' }}>{formatNumber(row.quantitySold)}</td>
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'right' }}>{formatCurrency(row.unitPrice)}</td>
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>
@@ -470,6 +542,7 @@ const UploadData = () => {
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'right' }}>{formatCurrency(row.costPrice)}</td>
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'right' }}>{formatCurrency(row.sellingPrice)}</td>
                           <td style={{ padding: '0.6rem 0.85rem', textAlign: 'center', fontWeight: 700 }}>{formatNumber(row.stockQuantity)}</td>
+                          <td style={{ padding: '0.6rem 0.85rem', textAlign: 'center', color: 'var(--text-muted)' }}>{row.leadTimeDays || 7}d</td>
                         </>
                       )}
                     </tr>
