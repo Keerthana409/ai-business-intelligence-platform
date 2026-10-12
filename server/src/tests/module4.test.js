@@ -1,5 +1,6 @@
 import '../config/testEnv.js';
 import 'dotenv/config';
+import http from 'http';
 import mongoose from 'mongoose';
 import request from 'supertest';
 import app from '../app.js';
@@ -44,13 +45,18 @@ async function runModule4Tests() {
     // Test 1.1b: Exact sample series [1200, 450, 640, 720, 300, 300, 0, 0, 11]
     const sampleSeries = [1200, 450, 640, 720, 300, 300, 0, 0, 11];
     const sampleHolt = calculateHoltLinear(sampleSeries, 7, 0.3, 0.1);
+    assert(sampleHolt.dampingPhi === 0.5, `Default damping parameter phi is 0.5 (${sampleHolt.dampingPhi})`);
     assert(sampleHolt.finalLevel >= 0, `Sample series final level is non-negative (${sampleHolt.finalLevel})`);
     assert(sampleHolt.finalLevel === 3.3, `Sample series final level equals expected level 3.30 (${sampleHolt.finalLevel})`);
     assert(sampleHolt.finalTrend === 0.33, `Sample series final trend is positive 0.33 (${sampleHolt.finalTrend})`);
     assert(sampleHolt.forecast.length === 7, 'Sample series returns 7-day forecast');
     assert(sampleHolt.forecast.every((v) => v > 0), `Sample series forecast values are positive (${sampleHolt.forecast.join(', ')})`);
     const sample7DaySum = Number(sampleHolt.forecast.reduce((a, b) => a + b, 0).toFixed(2));
-    assert(sample7DaySum === 32.34, `Sample series 7-day projected revenue is $32.34 ($${sample7DaySum})`);
+    assert(sample7DaySum === 25.08, `Sample series 7-day damped (phi=0.5) projected revenue is ₹25.08 (₹${sample7DaySum})`);
+
+    const sampleUndampedHolt = calculateHoltLinear(sampleSeries, 7, 0.3, 0.1, 1.0);
+    const sampleUndamped7DaySum = Number(sampleUndampedHolt.forecast.reduce((a, b) => a + b, 0).toFixed(2));
+    assert(sampleUndamped7DaySum === 32.34, `Sample series 7-day undamped (phi=1.0) projected revenue is ₹32.34 (₹${sampleUndamped7DaySum})`);
 
     // Test 1.1c: Negative initial trend [100, 80, 70, 60, 50, 40, 30]
     const negTrendSeries = [100, 80, 70, 60, 50, 40, 30];
@@ -110,9 +116,12 @@ async function runModule4Tests() {
     assert(sampleBacktest.hasSufficientDataForBacktest === true, 'Sample series backtest succeeds');
     assert(sampleBacktest.trainSize === 7, 'Sample backtest train size is 7 (days 1-7)');
     assert(sampleBacktest.testSize === 2, 'Sample backtest test size is 2 (days 8-9)');
-    assert(sampleBacktest.metrics.mae === 5.5, `Sample backtest MAE is 5.5 (${sampleBacktest.metrics.mae})`);
-    assert(sampleBacktest.metrics.rmse === 7.78, `Sample backtest RMSE is 7.78 (${sampleBacktest.metrics.rmse})`);
-    assert(sampleBacktest.metrics.wape === 100, `Sample backtest WAPE is 100% (${sampleBacktest.metrics.wape}%)`);
+    assert(sampleBacktest.metrics.mae === 12.39, `Sample damped backtest MAE is 12.39 (${sampleBacktest.metrics.mae})`);
+    assert(sampleBacktest.metrics.rmse === 16.88, `Sample damped backtest RMSE is 16.88 (${sampleBacktest.metrics.rmse})`);
+    assert(sampleBacktest.metrics.wape === 225.4, `Sample damped backtest WAPE is 225.4% (${sampleBacktest.metrics.wape}%)`);
+    assert(sampleBacktest.formulationComparison.undamped.mae === 5.5, `Sample undamped comparison MAE is 5.5 (${sampleBacktest.formulationComparison.undamped.mae})`);
+    assert(sampleBacktest.formulationComparison.undamped.rmse === 7.78, `Sample undamped comparison RMSE is 7.78 (${sampleBacktest.formulationComparison.undamped.rmse})`);
+    assert(sampleBacktest.formulationComparison.undamped.wape === 100, `Sample undamped comparison WAPE is 100% (${sampleBacktest.formulationComparison.undamped.wape}%)`);
 
     // Test 1.5: Continuous Time-Series Alignment & Zero-Sales Days
     const discreteRecords = [
@@ -636,6 +645,326 @@ async function runModule4Tests() {
     assert(r7BDemand.distinctRecordedDays === 0, 'User B product does NOT inherit User A sales of same product name');
     assert(r7BDemand.hasSufficientData === false, 'User B product hasSufficientData remains false');
 
+    console.log('\n--- 8. Random Forest Status, Reliability Separation & Fallback Message Verification ---');
+    const prevMlUrl = process.env.ML_SERVICE_URL;
+    const prevMlTimeout = process.env.ML_SERVICE_TIMEOUT_MS;
+
+    // Spin up a controllable local HTTP stub server to simulate Python ML service states
+    let stubMode = 'rf_success';
+    let lastReceivedForecastPayload = null;
+    const mlStubServer = http.createServer((req, res) => {
+      res.setHeader('Connection', 'close');
+      if (req.method === 'GET' && req.url === '/health') {
+        if (stubMode === 'health_offline') {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'unavailable' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            status: 'ok',
+            service: 'ai-bi-ml-service',
+            sklearnVersion: '1.5.2',
+            algorithms: {
+              salesForecasting: 'RandomForestRegressor',
+              productDemandForecasting: 'RandomForestRegressor',
+              transactionAnomalyDetection: 'IsolationForest',
+            },
+          })
+        );
+        return;
+      }
+
+      if (req.method === 'POST' && req.url === '/api/ml/forecast/sales') {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          try {
+            lastReceivedForecastPayload = JSON.parse(body);
+          } catch {
+            lastReceivedForecastPayload = null;
+          }
+
+          if (stubMode === 'forecast_http_500') {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ detail: 'Simulated internal Random Forest training error' }));
+            return;
+          }
+
+          if (stubMode === 'rf_failed_untrained') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                status: 'success',
+                data: {
+                  hasSufficientData: false,
+                  mlTrained: false,
+                  minRequiredDays: 14,
+                  distinctRecordedDays: 30,
+                  dateSpanDays: 30,
+                  supervisedSampleCount: 0,
+                  reason: 'Random Forest feature matrix singular during training.',
+                },
+              })
+            );
+            return;
+          }
+
+          // Default: rf_success (when >= 14 days) or <14 days gate
+          const recs = lastReceivedForecastPayload?.records || [];
+          const distinctDates = new Set(recs.map((r) => r.date)).size;
+          const horizonReq = lastReceivedForecastPayload?.horizon || 7;
+          if (distinctDates < 14) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                status: 'success',
+                data: {
+                  hasSufficientData: false,
+                  mlTrained: false,
+                  minRequiredDays: 14,
+                  distinctRecordedDays: distinctDates,
+                  dateSpanDays: distinctDates,
+                  supervisedSampleCount: Math.max(0, distinctDates - 7),
+                  reason: `Random Forest Regression requires at least 14 distinct recorded trading days (${14 - distinctDates} more day(s) needed).`,
+                },
+              })
+            );
+            return;
+          }
+
+          const preds = Array.from({ length: horizonReq }, (_, idx) => ({
+            date: `2026-10-${String(idx + 1).padStart(2, '0')}`,
+            forecastRevenue: Number((1800 + idx * 25).toFixed(2)),
+            lowerBound: Number((1600 + idx * 25).toFixed(2)),
+            upperBound: Number((2000 + idx * 25).toFixed(2)),
+            uncertaintyMargin: 200,
+          }));
+          const totalProj = Number(preds.reduce((s, p) => s + p.forecastRevenue, 0).toFixed(2));
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              status: 'success',
+              data: {
+                hasSufficientData: true,
+                mlTrained: true,
+                horizon: horizonReq,
+                algorithm: 'Random Forest Regression (scikit-learn)',
+                parameters: {
+                  n_estimators: 100,
+                  max_depth: 6,
+                  min_samples_leaf: 2,
+                  finalLevel: 1790,
+                  finalTrend: 25,
+                  featureImportances: { lag_1: 0.42, rolling_mean_7: 0.31 },
+                  artifactPath: 'rf_sales_test.joblib',
+                },
+                historicalCoverage: {
+                  startDate: '2026-09-01',
+                  endDate: '2026-09-30',
+                  distinctRecordedDays: distinctDates,
+                  totalCalendarDays: distinctDates,
+                  supervisedTrainingSamples: distinctDates - 7,
+                },
+                historicalActuals: recs.slice(-30).map((r) => ({
+                  date: r.date,
+                  value: r.amount,
+                  isRecorded: true,
+                })),
+                predictions: preds,
+                totalProjectedRevenue: totalProj,
+                modelEvaluation: {
+                  mae: 64.2,
+                  rmse: 78.5,
+                  wape: 3.6,
+                  mape: 3.5,
+                  mapeExplanation: 'Calculated across all historical holdout test observations.',
+                  normalizedAccuracy: 96.4,
+                  validationMethod: 'Random Forest Chronological Holdout',
+                  isMLValidated: true,
+                  isProvisional: false,
+                  accuracyStatus: 'Verified (Random Forest Holdout)',
+                  backtestTrainDays: 27,
+                  supervisedTrainSamples: 20,
+                  backtestTestDays: 3,
+                  backtestActuals: [1750, 1800, 1820],
+                  backtestPredictions: [1710, 1765, 1795],
+                },
+              },
+            })
+          );
+        });
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ detail: 'Not Found' }));
+    });
+
+    await new Promise((resolve) => mlStubServer.listen(0, '127.0.0.1', resolve));
+    const stubPort = mlStubServer.address().port;
+    process.env.ML_SERVICE_URL = `http://127.0.0.1:${stubPort}`;
+    process.env.ML_SERVICE_TIMEOUT_MS = '2000';
+
+    try {
+      // 8A. Fewer than 14 trading days (8 distinct trading days for User B)
+      await Sale.deleteMany({ userId: userBId });
+      for (let d = 1; d <= 8; d++) {
+        await Sale.create({
+          userId: userBId,
+          productName: 'Three Day Device',
+          quantitySold: 5 + d,
+          unitPrice: 100,
+          totalRevenue: (5 + d) * 100,
+          date: new Date(`2026-09-${String(d).padStart(2, '0')}T10:00:00Z`),
+        });
+      }
+
+      stubMode = 'rf_success';
+      const res8Days = await request(app)
+        .get('/api/forecast/sales?horizon=7')
+        .set('Authorization', `Bearer ${tokenB}`);
+
+      assert(res8Days.status === 200, '8-day forecast returns HTTP 200');
+      const d8 = res8Days.body.data;
+      assert(d8.mlMetadata.distinctRecordedDays === 8, '8-day store reports distinctRecordedDays = 8');
+      assert(d8.mlMetadata.minRequiredDaysForML === 14, '8-day store reports minRequiredDaysForML = 14');
+      assert(d8.mlMetadata.additionalDaysNeededForML === 6, '8-day store reports additionalDaysNeededForML = 6');
+      assert(d8.mlMetadata.meetsMinDaysRequirement === false, '8-day store reports meetsMinDaysRequirement = false');
+      assert(d8.mlMetadata.mlAttempted === false, '8-day store reports mlAttempted = false (< 14 days)');
+      assert(d8.mlMetadata.mlSucceeded === false, '8-day store reports mlSucceeded = false');
+      assert(d8.mlMetadata.mlActive === false, '8-day store reports mlActive = false');
+      assert(d8.mlMetadata.mlServiceOnline === true, '8-day store separately reports mlServiceOnline = true');
+      assert(
+        d8.mlMetadata.fallbackReason.includes('8 distinct recorded trading days') &&
+          d8.mlMetadata.fallbackReason.includes('6 more days needed'),
+        '8-day fallbackReason accurately reports 8 days recorded and 6 more days needed'
+      );
+      assert(
+        d8.modelEvaluation.isMLValidated === false &&
+          d8.modelEvaluation.accuracyStatus === 'Pending (Needs 14+ Days)',
+        '8-day store does not claim verified ML reliability'
+      );
+
+      // Seed 30 distinct trading days for User B (2026-09-01 to 2026-09-30)
+      await Sale.deleteMany({ userId: userBId });
+      for (let d = 1; d <= 30; d++) {
+        const rev = 1500 + d * 10;
+        await Sale.create({
+          userId: userBId,
+          productName: 'Three Day Device',
+          quantitySold: 15,
+          unitPrice: rev / 15,
+          totalRevenue: rev,
+          date: new Date(`2026-09-${String(d).padStart(2, '0')}T10:00:00Z`),
+        });
+      }
+
+      // 8B. 30 trading days with successful Random Forest training
+      stubMode = 'rf_success';
+      lastReceivedForecastPayload = null;
+      const res30Success = await request(app)
+        .get('/api/forecast/sales?horizon=7')
+        .set('Authorization', `Bearer ${tokenB}`);
+
+      assert(res30Success.status === 200, '30-day RF success returns HTTP 200');
+      const d30Success = res30Success.body.data;
+      assert(
+        lastReceivedForecastPayload &&
+          Array.isArray(lastReceivedForecastPayload.records) &&
+          lastReceivedForecastPayload.records.length === 30 &&
+          lastReceivedForecastPayload.records.every(
+            (r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date) && typeof r.amount === 'number'
+          ),
+        'Backend sends all 30 normalized historical revenue records (YYYY-MM-DD + numeric amount) to Python ML service'
+      );
+      assert(d30Success.algorithm === 'Random Forest Regression (scikit-learn)', '30-day RF success uses Random Forest algorithm');
+      assert(d30Success.mlMetadata.mlActive === true, '30-day RF success sets mlMetadata.mlActive = true');
+      assert(d30Success.mlMetadata.mlAttempted === true, '30-day RF success sets mlMetadata.mlAttempted = true');
+      assert(d30Success.mlMetadata.mlSucceeded === true, '30-day RF success sets mlMetadata.mlSucceeded = true');
+      assert(d30Success.mlMetadata.mlServiceOnline === true, '30-day RF success sets mlMetadata.mlServiceOnline = true');
+      assert(d30Success.mlMetadata.meetsMinDaysRequirement === true, '30-day RF success sets meetsMinDaysRequirement = true');
+      assert(d30Success.mlMetadata.distinctRecordedDays === 30, '30-day RF success reports 30 distinct trading days');
+      assert(d30Success.mlMetadata.additionalDaysNeededForML === 0, '30-day RF success reports 0 additional days needed');
+      assert(d30Success.mlMetadata.fallbackReason === null, '30-day RF success has fallbackReason = null');
+      assert(
+        d30Success.modelEvaluation.isMLValidated === true &&
+          d30Success.modelEvaluation.accuracyStatus === 'Verified (Random Forest Holdout)' &&
+          d30Success.modelEvaluation.normalizedAccuracy === 96.4,
+        '30-day RF success reports verified Random Forest holdout reliability score (96.4%)'
+      );
+
+      // 8C. 30 trading days with failed ML training (mlTrained: false) and statistical fallback
+      stubMode = 'rf_failed_untrained';
+      const res30Untrained = await request(app)
+        .get('/api/forecast/sales?horizon=7')
+        .set('Authorization', `Bearer ${tokenB}`);
+
+      assert(res30Untrained.status === 200, '30-day failed ML training fallback returns HTTP 200');
+      const d30Untrained = res30Untrained.body.data;
+      assert(d30Untrained.algorithm === "Holt's Linear Exponential Smoothing", '30-day failed ML training falls back to Holt Linear');
+      assert(d30Untrained.mlMetadata.mlActive === false, '30-day failed ML training sets mlActive = false (never forced true)');
+      assert(d30Untrained.mlMetadata.mlAttempted === true, '30-day failed ML training sets mlAttempted = true');
+      assert(d30Untrained.mlMetadata.mlSucceeded === false, '30-day failed ML training sets mlSucceeded = false');
+      assert(d30Untrained.mlMetadata.meetsMinDaysRequirement === true, '30-day failed ML training sets meetsMinDaysRequirement = true');
+      assert(d30Untrained.mlMetadata.distinctRecordedDays === 30, '30-day failed ML training reports 30 distinct trading days');
+      assert(
+        !d30Untrained.mlMetadata.fallbackReason.includes('more days needed') &&
+          !d30Untrained.mlMetadata.fallbackReason.includes('0 more days') &&
+          d30Untrained.mlMetadata.fallbackReason.includes('Random Forest feature matrix singular'),
+        `30-day failed ML fallbackReason reports actual backend reason and never claims more days are needed (got: "${d30Untrained.mlMetadata.fallbackReason}")`
+      );
+      assert(
+        d30Untrained.modelEvaluation.isMLValidated === false &&
+          d30Untrained.modelEvaluation.accuracyStatus === 'Statistical Holdout Only (ML Inactive)' &&
+          d30Untrained.modelEvaluation.statisticalBacktestStatus === 'Verified (Statistical Holdout)' &&
+          d30Untrained.modelEvaluation.mlValidationStatus === 'Unavailable (Random Forest Fallback)',
+        '30-day failed ML fallback separates statistical backtest status from ML validation status and does NOT display a verified ML reliability score'
+      );
+
+      // 8D. 30 trading days with Python service online (/health 200) but forecast request failing (HTTP 500)
+      stubMode = 'forecast_http_500';
+      const res30Http500 = await request(app)
+        .get('/api/forecast/sales?horizon=7')
+        .set('Authorization', `Bearer ${tokenB}`);
+
+      assert(res30Http500.status === 200, '30-day HTTP 500 forecast failure gracefully returns HTTP 200 fallback');
+      const d30Http500 = res30Http500.body.data;
+      assert(
+        d30Http500.mlMetadata.mlServiceOnline === true,
+        'Python service health status remains online (true) when /health succeeds even if forecast endpoint fails'
+      );
+      assert(
+        d30Http500.mlMetadata.mlAttempted === true &&
+          d30Http500.mlMetadata.mlSucceeded === false &&
+          d30Http500.mlMetadata.mlActive === false,
+        'Reports mlAttempted = true, mlSucceeded = false, mlActive = false when forecast request fails'
+      );
+      assert(
+        d30Http500.mlMetadata.fallbackReason.includes('30 distinct trading days') &&
+          d30Http500.mlMetadata.fallbackReason.includes('HTTP 500') &&
+          !d30Http500.mlMetadata.fallbackReason.includes('more days needed'),
+        `Reports exact HTTP 500 failure reason without claiming more days are needed (got: "${d30Http500.mlMetadata.fallbackReason}")`
+      );
+    } finally {
+      mlStubServer.closeAllConnections?.();
+      await new Promise((resolve) => mlStubServer.close(resolve));
+      if (prevMlUrl === undefined) {
+        delete process.env.ML_SERVICE_URL;
+      } else {
+        process.env.ML_SERVICE_URL = prevMlUrl;
+      }
+      if (prevMlTimeout === undefined) {
+        delete process.env.ML_SERVICE_TIMEOUT_MS;
+      } else {
+        process.env.ML_SERVICE_TIMEOUT_MS = prevMlTimeout;
+      }
+    }
+
     // Clean up
     await Product.deleteMany({ userId: { $in: [userAId, userBId] } });
     await Sale.deleteMany({ userId: { $in: [userAId, userBId] } });
@@ -645,14 +974,10 @@ async function runModule4Tests() {
     console.log(`🎉 [COMPLETED] Module 4 Tests: ${passed} passed, ${failed} failed`);
     console.log(`========================================\n`);
 
-    if (failed > 0) {
-      process.exit(1);
-    } else {
-      process.exit(0);
-    }
+    process.exitCode = failed > 0 ? 1 : 0;
   } catch (err) {
     console.error('💥 [TEST ERROR]:', err);
-    process.exit(1);
+    process.exitCode = 1;
   } finally {
     await mongoose.connection.close();
   }

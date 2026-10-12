@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import {
+  DEFAULT_DAMPING_PHI,
   alignDailyTimeSeries,
   calculateHoltLinear,
   calculateUncertaintyBands,
@@ -18,7 +19,7 @@ import {
 
 /**
  * @desc    Generate store-wide sales revenue forecast using Random Forest Regression (when >= 14 days
- *          and Python ML service is online) with automatic fallback to Holt's Linear Exponential Smoothing
+ *          and Python ML service is online) with automatic fallback to Damped Holt's Linear Exponential Smoothing
  * @route   GET /api/forecast/sales
  * @access  Private
  */
@@ -26,6 +27,11 @@ export const getSalesForecast = async (req, res) => {
   try {
     const userObjectId = new mongoose.Types.ObjectId(req.user.id);
     const horizon = Math.min(30, Math.max(7, parseInt(req.query.horizon, 10) || 7));
+    const parsedPhi = req.query.phi !== undefined ? parseFloat(req.query.phi) : DEFAULT_DAMPING_PHI;
+    const phi =
+      Number.isFinite(parsedPhi) && parsedPhi > 0 && parsedPhi <= 1
+        ? parsedPhi
+        : DEFAULT_DAMPING_PHI;
 
     // Retrieve all recorded sales sorted chronologically
     const sales = await Sale.find({ userId: userObjectId }).sort({ date: 1 });
@@ -43,6 +49,9 @@ export const getSalesForecast = async (req, res) => {
       endDate,
     } = alignDailyTimeSeries(records);
 
+    const meetsMinDaysRequirement = distinctRecordedDays >= MIN_DAYS_FOR_RF_FORECAST;
+    const additionalDaysNeededForML = Math.max(0, MIN_DAYS_FOR_RF_FORECAST - distinctRecordedDays);
+
     // Initial Data Sufficiency Gate: minimum 5 distinct calendar days
     if (distinctRecordedDays < 5) {
       return res.status(200).json({
@@ -58,11 +67,17 @@ export const getSalesForecast = async (req, res) => {
           guidance: 'Record sales transactions over multiple days or upload a historical sales CSV batch to enable predictive forecasting.',
           mlMetadata: {
             mlActive: false,
+            mlAttempted: false,
+            mlSucceeded: false,
             mlServiceOnline: false,
+            meetsMinDaysRequirement: false,
             algorithmUsed: 'None (Insufficient Data)',
             minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
             distinctRecordedDays,
-            fallbackReason: `Dataset has ${distinctRecordedDays} distinct recorded day(s). Minimum 5 days required for statistical forecasting and ${MIN_DAYS_FOR_RF_FORECAST} days for Random Forest Regression.`,
+            additionalDaysNeededForML,
+            statisticalBacktestStatus: 'Insufficient Data (< 5 Days)',
+            mlValidationStatus: `Pending (${additionalDaysNeededForML} More Days Needed)`,
+            fallbackReason: `Dataset has ${distinctRecordedDays} distinct recorded trading day(s). Minimum 5 days required for statistical forecasting and ${MIN_DAYS_FOR_RF_FORECAST} days (${additionalDaysNeededForML} more needed) for Random Forest Regression.`,
           },
         },
       });
@@ -72,14 +87,15 @@ export const getSalesForecast = async (req, res) => {
     const alpha = 0.3;
     const beta = 0.1;
 
-    // 1. Always compute Holt's Linear statistical baseline and backtest
-    const { forecast, finalLevel, finalTrend } = calculateHoltLinear(
+    // 1. Always compute Damped Holt's Linear statistical baseline and backtest
+    const { forecast, finalLevel, finalTrend, dampingPhi } = calculateHoltLinear(
       values,
       horizon,
       alpha,
-      beta
+      beta,
+      phi
     );
-    const backtest = runChronologicalBacktest(values, 3);
+    const backtest = runChronologicalBacktest(values, 3, alpha, beta, phi);
     const rmse = backtest.hasSufficientDataForBacktest ? backtest.metrics.rmse : 5.0;
     const uncertaintyBands = calculateUncertaintyBands(forecast, rmse);
 
@@ -95,11 +111,12 @@ export const getSalesForecast = async (req, res) => {
       holtPredictions.reduce((sum, p) => sum + p.forecastRevenue, 0).toFixed(2)
     );
 
-    // 2. Evaluate eligibility and query Python ML service
-    let mlServiceOnline = false;
-    let fallbackReason = null;
+    const statisticalBacktestStatus = backtest.hasSufficientDataForBacktest
+      ? (meetsMinDaysRequirement ? 'Verified (Statistical Holdout)' : 'Provisional (Statistical Holdout)')
+      : 'Insufficient Data';
 
-    // Always query Python ML service to evaluate sales records
+    // 2. Evaluate eligibility and query Python ML service
+    const mlAttempted = meetsMinDaysRequirement;
     const mlRes = await requestMLSalesForecast({
       records,
       horizon,
@@ -107,25 +124,49 @@ export const getSalesForecast = async (req, res) => {
       minRequiredDays: MIN_DAYS_FOR_RF_FORECAST,
     });
 
-    mlServiceOnline = mlRes.serviceOnline;
+    const mlServiceOnline = Boolean(mlRes.serviceOnline);
+    const mlSucceeded = Boolean(
+      mlAttempted && mlServiceOnline && !mlRes.error && mlRes.data && mlRes.data.mlTrained === true
+    );
 
-    if (mlRes.serviceOnline && mlRes.data && mlRes.data.mlTrained) {
+    if (mlSucceeded) {
       const rfData = mlRes.data;
+      const rfEval = rfData.modelEvaluation
+        ? {
+            ...rfData.modelEvaluation,
+            validationMethod: 'Random Forest Chronological Holdout',
+            isMLValidated: true,
+            isProvisional: false,
+            accuracyStatus: 'Verified (Random Forest Holdout)',
+            statisticalBacktestStatus,
+            mlValidationStatus: 'Verified (Random Forest Holdout)',
+            requiredDaysForValidation: MIN_DAYS_FOR_RF_FORECAST,
+            additionalDaysNeeded: 0,
+          }
+        : null;
+
       return res.status(200).json({
         status: 'success',
         data: {
           ...rfData,
+          modelEvaluation: rfEval,
           mlMetadata: {
             mlActive: true,
+            mlAttempted: true,
+            mlSucceeded: true,
             mlServiceOnline: true,
+            meetsMinDaysRequirement: true,
             algorithmUsed: 'Random Forest Regression (scikit-learn)',
             minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
             distinctRecordedDays,
             additionalDaysNeededForML: 0,
+            statisticalBacktestStatus,
+            mlValidationStatus: rfEval ? 'Verified (Random Forest Holdout)' : 'Unavailable',
             supervisedTrainingSamples: rfData.historicalCoverage?.supervisedTrainingSamples || 0,
             featureImportances: rfData.parameters?.featureImportances || {},
             artifactPath: rfData.parameters?.artifactPath || null,
             fallbackReason: null,
+            requestError: null,
           },
           statisticalBaselineComparison: {
             algorithm: 'Holt\'s Linear Exponential Smoothing',
@@ -136,9 +177,26 @@ export const getSalesForecast = async (req, res) => {
       });
     }
 
-    fallbackReason = !mlRes.serviceOnline
-      ? `Python ML service is currently offline (${mlRes.error || 'connection refused'}). Using Holt's Linear Exponential Smoothing statistical fallback.`
-      : (mlRes.data?.reason || `Current dataset has ${distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_RF_FORECAST} distinct days are required to train Random Forest Regression without overfitting. Retaining Holt's Linear Exponential Smoothing fallback.`);
+    // Build accurate, non-contradictory fallback reason
+    let fallbackReason = '';
+    if (!meetsMinDaysRequirement) {
+      fallbackReason = `Store has ${distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_RF_FORECAST} distinct days (${additionalDaysNeededForML} more day${additionalDaysNeededForML === 1 ? '' : 's'} needed) are required before Random Forest training is attempted. Using Holt's Linear Exponential Smoothing statistical projection.`;
+      if (!mlServiceOnline) {
+        fallbackReason += ` (Note: Python ML service is currently offline: ${mlRes.error || 'unreachable'}.)`;
+      }
+    } else if (!mlServiceOnline) {
+      fallbackReason = `Store meets the ${MIN_DAYS_FOR_RF_FORECAST}-day minimum (${distinctRecordedDays} distinct trading days recorded) and Random Forest training was attempted, but the Python ML service is currently offline or unreachable (${mlRes.error || 'connection refused'}). Using Holt's Linear Exponential Smoothing statistical fallback.`;
+    } else if (mlRes.error) {
+      fallbackReason = `Store meets the ${MIN_DAYS_FOR_RF_FORECAST}-day minimum (${distinctRecordedDays} distinct trading days recorded) and Random Forest training was attempted, but the Python ML forecast request failed (${mlRes.error}). Using Holt's Linear Exponential Smoothing statistical fallback.`;
+    } else if (mlRes.data?.reason) {
+      fallbackReason = `Random Forest training was attempted with ${distinctRecordedDays} distinct trading days (minimum ${MIN_DAYS_FOR_RF_FORECAST} required), but fell back to Holt's Linear Exponential Smoothing: ${mlRes.data.reason}`;
+    } else {
+      fallbackReason = `Store meets the ${MIN_DAYS_FOR_RF_FORECAST}-day minimum (${distinctRecordedDays} distinct trading days recorded) and Random Forest training was attempted, but the ML service did not return a trained model. Using Holt's Linear Exponential Smoothing statistical fallback.`;
+    }
+
+    const mlValidationStatus = meetsMinDaysRequirement
+      ? 'Unavailable (Random Forest Fallback)'
+      : `Pending (${additionalDaysNeededForML} More Day${additionalDaysNeededForML === 1 ? '' : 's'} Needed)`;
 
     return res.status(200).json({
       status: 'success',
@@ -146,7 +204,7 @@ export const getSalesForecast = async (req, res) => {
         hasSufficientData: true,
         horizon,
         algorithm: 'Holt\'s Linear Exponential Smoothing',
-        parameters: { alpha, beta, finalLevel, finalTrend },
+        parameters: { alpha, beta, phi: dampingPhi, finalLevel, finalTrend },
         historicalCoverage: {
           startDate,
           endDate,
@@ -164,31 +222,48 @@ export const getSalesForecast = async (req, res) => {
               mape: backtest.metrics.mape,
               mapeExplanation: backtest.metrics.mapeExplanation,
               normalizedAccuracy: backtest.metrics.normalizedAccuracy,
-              accuracyStatus: distinctRecordedDays >= 14 ? 'Verified' : 'Pending (Needs 14+ Days)',
-              isProvisional: distinctRecordedDays < 14,
-              requiredDaysForValidation: 14,
-              additionalDaysNeeded: Math.max(0, 14 - distinctRecordedDays),
+              validationMethod: 'Statistical Holt Holdout',
+              isMLValidated: false,
+              statisticalBacktestStatus,
+              mlValidationStatus,
+              accuracyStatus: meetsMinDaysRequirement
+                ? 'Statistical Holdout Only (ML Inactive)'
+                : 'Pending (Needs 14+ Days)',
+              isProvisional: true,
+              requiredDaysForValidation: MIN_DAYS_FOR_RF_FORECAST,
+              additionalDaysNeeded: additionalDaysNeededForML,
+              dampingPhi: backtest.dampingPhi,
               accuracyDefinition: 'Normalized Backtest Accuracy = max(0, 100 - WAPE)%, where WAPE = sum(|actual - predicted|) / sum(actual) * 100 on the holdout test period.',
               backtestTrainDays: backtest.trainSize,
               backtestTestDays: backtest.testSize,
               backtestActuals: backtest.testActuals,
               backtestPredictions: backtest.testPredictions,
+              formulationComparison: backtest.formulationComparison,
             }
           : null,
         transparency: {
-          algorithmName: 'Holt\'s Linear (Double) Exponential Smoothing (Provisional Statistical Fallback)',
-          formula: 'L_t = max(0, alpha*y_t + (1-alpha)*max(0, L_{t-1} + T_{t-1})) | T_t = beta*(L_t - L_{t-1}) + (1-beta)*T_{t-1}',
+          algorithmName: 'Holt\'s Linear (Double) Exponential Smoothing with Damped Trend (Statistical Fallback)',
+          formula: 'L_t = max(0, alpha*y_t + (1-alpha)*max(0, L_{t-1} + T_{t-1})) | T_t = beta*(L_t - L_{t-1}) + (1-beta)*T_{t-1} | y_hat_{t+h} = max(0, L_t + sum_{i=1..h}(phi^i)*T_t)',
           uncertaintyMethod: 'Approximate Uncertainty Range (±1.96 × Residual Standard Error under empirical normality assumption).',
-          limitations: 'Provisional baseline projection. Long-term accuracy increases with larger sample sizes (14+ days for AI modeling).',
-          minimumComputationalRequirementNote: `Current dataset has ${distinctRecordedDays} days. Minimum 14 days required for AI Random Forest modeling (${Math.max(0, 14 - distinctRecordedDays)} more days needed).`,
+          limitations: 'Statistical trend smoothing baseline. Does not capture multi-lag calendar or day-of-week non-linearities modeled by Random Forest.',
+          minimumComputationalRequirementNote: meetsMinDaysRequirement
+            ? `Current dataset has ${distinctRecordedDays} distinct trading days (meets the ${MIN_DAYS_FOR_RF_FORECAST}-day minimum requirement). ${fallbackReason}`
+            : `Current dataset has ${distinctRecordedDays} distinct trading days. Minimum ${MIN_DAYS_FOR_RF_FORECAST} days required for AI Random Forest modeling (${additionalDaysNeededForML} more day${additionalDaysNeededForML === 1 ? '' : 's'} needed).`,
         },
         mlMetadata: {
           mlActive: false,
+          mlAttempted,
+          mlSucceeded: false,
           mlServiceOnline,
+          meetsMinDaysRequirement,
           algorithmUsed: 'Holt\'s Linear Exponential Smoothing (Statistical Fallback)',
           minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
           distinctRecordedDays,
+          additionalDaysNeededForML,
+          statisticalBacktestStatus,
+          mlValidationStatus,
           fallbackReason,
+          requestError: mlRes.error || null,
         },
       },
     });
@@ -428,16 +503,23 @@ export const getForecastEvaluation = async (req, res) => {
 
     const values = series.map((s) => s.value);
     const backtest = runChronologicalBacktest(values, 3);
+    const meetsMinDaysRequirement = distinctRecordedDays >= MIN_DAYS_FOR_RF_FORECAST;
+    const additionalDaysNeededForML = Math.max(0, MIN_DAYS_FOR_RF_FORECAST - distinctRecordedDays);
 
     let mlEvaluation = null;
-    if (distinctRecordedDays >= MIN_DAYS_FOR_RF_FORECAST) {
+    let mlServiceOnline = false;
+    let mlSucceeded = false;
+
+    if (meetsMinDaysRequirement) {
       const mlRes = await requestMLSalesForecast({
         records,
         horizon: 7,
         scopeId: String(req.user.id),
         minRequiredDays: MIN_DAYS_FOR_RF_FORECAST,
       });
-      if (mlRes.serviceOnline && mlRes.data && mlRes.data.mlTrained) {
+      mlServiceOnline = Boolean(mlRes.serviceOnline);
+      if (mlRes.serviceOnline && !mlRes.error && mlRes.data && mlRes.data.mlTrained) {
+        mlSucceeded = true;
         mlEvaluation = mlRes.data.modelEvaluation;
       }
     }
@@ -448,7 +530,17 @@ export const getForecastEvaluation = async (req, res) => {
         hasSufficientData: true,
         distinctRecordedDays,
         minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
+        meetsMinDaysRequirement,
+        additionalDaysNeededForML,
+        mlAttempted: meetsMinDaysRequirement,
+        mlSucceeded,
+        mlServiceOnline,
         ...backtest,
+        mlValidationStatus: mlSucceeded
+          ? 'Verified (Random Forest Holdout)'
+          : meetsMinDaysRequirement
+            ? 'Unavailable (Random Forest Fallback)'
+            : `Pending (${additionalDaysNeededForML} More Day${additionalDaysNeededForML === 1 ? '' : 's'} Needed)`,
         mlEvaluation,
       },
     });

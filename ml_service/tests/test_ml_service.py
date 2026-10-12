@@ -147,14 +147,18 @@ def test_isolation_forest_transactions():
 
 
 def test_fastapi_endpoints():
-    # Forecast endpoint with 20 days
+    # Forecast endpoint with 30 trading days
     records = [
-        {"date": f"2026-09-{d:02d}", "amount": 250.0 + d * 10.0}
-        for d in range(1, 21)
+        {"date": f"2026-09-{d:02d}", "amount": 1500.0 + d * 15.0}
+        for d in range(1, 31)
     ]
-    f_res = client.post("/api/ml/forecast/sales", json={"records": records, "horizon": 7, "scopeId": "api_test"})
+    f_res = client.post("/api/ml/forecast/sales", json={"records": records, "horizon": 7, "scopeId": "api_test_30d"})
     assert f_res.status_code == 200
-    assert f_res.json()["data"]["mlTrained"] is True
+    f_data = f_res.json()["data"]
+    assert f_data["mlTrained"] is True
+    assert f_data["historicalCoverage"]["distinctRecordedDays"] == 30
+    assert f_data["modelEvaluation"]["isMLValidated"] is True
+    assert f_data["modelEvaluation"]["accuracyStatus"] == "Verified (Random Forest Holdout)"
 
     # Transactions endpoint with 18 transactions
     txs = [

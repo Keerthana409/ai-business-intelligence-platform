@@ -45,7 +45,7 @@ export const addDays = (dateStr, days) => {
  */
 export const alignDailyTimeSeries = (records = []) => {
   if (!records || records.length === 0) {
-    return { series: [], distinctRecordedDays: 0, dateSpanDays: 0 };
+    return { series: [], distinctRecordedDays: 0, dateSpanDays: 0, startDate: null, endDate: null };
   }
 
   // Aggregate by calendar date
@@ -61,7 +61,7 @@ export const alignDailyTimeSeries = (records = []) => {
   const distinctRecordedDays = sortedDates.length;
 
   if (distinctRecordedDays === 0) {
-    return { series: [], distinctRecordedDays: 0, dateSpanDays: 0 };
+    return { series: [], distinctRecordedDays: 0, dateSpanDays: 0, startDate: null, endDate: null };
   }
 
   const startDate = new Date(`${sortedDates[0]}T00:00:00.000Z`);
@@ -91,12 +91,20 @@ export const alignDailyTimeSeries = (records = []) => {
 };
 
 /**
- * Holt's Linear Exponential Smoothing with Non-Negative Domain Constraints
+ * Default damped trend parameter (0 < phi <= 1).
+ * phi = 0.5 damps multi-step linear extrapolation so steep short-term slopes taper off
+ * rather than forcing future multi-day revenue forecasts to zero.
+ * Setting phi = 1.0 recovers undamped Holt linear extrapolation.
+ */
+export const DEFAULT_DAMPING_PHI = 0.5;
+
+/**
+ * Holt's Linear Exponential Smoothing with Configurable Damped Trend & Non-Negative Constraints
  *
  * Initialization:
  * Computes an Ordinary Least Squares (OLS) regression slope and intercept over an
  * initial window m = min(5, n). This avoids catastrophic sensitivity to a single
- * initial day's jump (such as $1200 down to $450).
+ * initial day's jump (such as ₹600 down to ₹225).
  *
  * In-sample Recursion:
  * Level: L_t = max(0, alpha * y_t + (1 - alpha) * max(0, L_{t-1} + T_{t-1}))
@@ -104,20 +112,33 @@ export const alignDailyTimeSeries = (records = []) => {
  * Trend Damping: If L_t + T_t < 0, damp T_t = -L_t to ensure next period's expected
  * level remains within the non-negative retail domain without negative runaway.
  *
- * Out-of-Sample Forecast:
- * y_hat_{t+h} = max(0, L_t + h * T_t)
+ * Out-of-Sample Damped Forecast:
+ * y_hat_{t+h} = max(0, L_t + (sum_{i=1}^h phi^i) * T_t)
  *
  * @param {number[]} values - Historical observations
  * @param {number} horizon - Number of steps to forecast ahead (e.g. 7, 14, 30)
  * @param {number} alpha - Level smoothing parameter (0 < alpha <= 1, default 0.3)
  * @param {number} beta - Trend smoothing parameter (0 < beta <= 1, default 0.1)
- * @returns {{ fitted: number[], forecast: number[], finalLevel: number, finalTrend: number }}
+ * @param {number} phi - Damped trend parameter (0 < phi <= 1, default 0.5; 1.0 = undamped)
+ * @returns {{ fitted: number[], forecast: number[], finalLevel: number, finalTrend: number, dampingPhi: number }}
  */
-export const calculateHoltLinear = (values = [], horizon = 7, alpha = 0.3, beta = 0.1) => {
+export const calculateHoltLinear = (
+  values = [],
+  horizon = 7,
+  alpha = 0.3,
+  beta = 0.1,
+  phi = DEFAULT_DAMPING_PHI
+) => {
   const n = values.length;
   if (n < 2) {
     throw new Error('Holt linear smoothing requires at least 2 historical observations.');
   }
+
+  const safeHorizon = Math.max(1, Math.floor(Number(horizon) || 7));
+  const safePhi =
+    typeof phi === 'number' && Number.isFinite(phi) && phi > 0 && phi <= 1
+      ? phi
+      : DEFAULT_DAMPING_PHI;
 
   // Regression slope initialization over window m = min(5, n)
   const m = Math.min(5, n);
@@ -169,10 +190,12 @@ export const calculateHoltLinear = (values = [], horizon = 7, alpha = 0.3, beta 
     fitted.push(Math.max(0, Number((prevLevel + prevTrend).toFixed(2))));
   }
 
-  // Generate out-of-sample forecast
+  // Generate out-of-sample forecast with damped trend multiplier sum_{i=1}^h (phi^i)
   const forecast = [];
-  for (let h = 1; h <= horizon; h++) {
-    const rawVal = level + h * trend;
+  let cumulativePhi = 0;
+  for (let h = 1; h <= safeHorizon; h++) {
+    cumulativePhi += Math.pow(safePhi, h);
+    const rawVal = level + cumulativePhi * trend;
     forecast.push(Math.max(0, Number(rawVal.toFixed(2))));
   }
 
@@ -181,6 +204,7 @@ export const calculateHoltLinear = (values = [], horizon = 7, alpha = 0.3, beta 
     forecast,
     finalLevel: Number(level.toFixed(2)),
     finalTrend: Number(trend.toFixed(4)),
+    dampingPhi: safePhi,
   };
 };
 
@@ -266,12 +290,22 @@ export const calculateEvaluationMetrics = (actuals = [], predicted = []) => {
  * Chronological Retrospective Backtest
  * Ensures no future data leaks into the model used to predict earlier observations.
  * Splits series chronologically into train (first N - k days) and test (last k days).
+ * Compares both the active damped formulation (phi) and undamped formulation (phi = 1.0).
  *
  * @param {number[]} values - Continuous chronological series
  * @param {number} testHorizon - Number of holdout days (default 3)
- * @returns {{ testActuals: number[], testPredictions: number[], metrics: object, trainSize: number, testSize: number }}
+ * @param {number} alpha - Level smoothing parameter (default 0.3)
+ * @param {number} beta - Trend smoothing parameter (default 0.1)
+ * @param {number} phi - Damped trend parameter (default 0.5; 1.0 = undamped)
+ * @returns {object}
  */
-export const runChronologicalBacktest = (values = [], testHorizon = 3) => {
+export const runChronologicalBacktest = (
+  values = [],
+  testHorizon = 3,
+  alpha = 0.3,
+  beta = 0.1,
+  phi = DEFAULT_DAMPING_PHI
+) => {
   const n = values.length;
   // Require at least 5 points total (e.g. 3 train, 2 test)
   if (n < 5) {
@@ -281,28 +315,59 @@ export const runChronologicalBacktest = (values = [], testHorizon = 3) => {
     };
   }
 
+  const safePhi =
+    typeof phi === 'number' && Number.isFinite(phi) && phi > 0 && phi <= 1
+      ? phi
+      : DEFAULT_DAMPING_PHI;
+
   const k = Math.min(testHorizon, Math.max(2, Math.floor(n * 0.25)));
   const trainSize = n - k;
 
   const trainValues = values.slice(0, trainSize);
   const testActuals = values.slice(trainSize);
 
-  // Train Holt's model strictly on trainValues
-  const { forecast } = calculateHoltLinear(trainValues, k);
-
+  // Train Holt's model strictly on trainValues with active damping parameter
+  const { forecast, dampingPhi } = calculateHoltLinear(trainValues, k, alpha, beta, safePhi);
   const metrics = calculateEvaluationMetrics(testActuals, forecast);
+
+  // Also evaluate undamped Holt linear formulation (phi = 1.0) on identical split for comparison
+  const { forecast: undampedForecast } = calculateHoltLinear(trainValues, k, alpha, beta, 1.0);
+  const undampedMetrics = calculateEvaluationMetrics(testActuals, undampedForecast);
 
   return {
     hasSufficientDataForBacktest: true,
+    validationMethod: 'Statistical Holt Holdout',
+    isMLValidated: false,
     isProvisional: n < 14,
-    accuracyStatus: n >= 14 ? 'Verified' : 'Pending (Needs 14+ Days)',
+    statisticalBacktestStatus: n >= 14 ? 'Verified (Statistical Holdout)' : 'Provisional (Needs 14+ Days)',
+    mlValidationStatus: n >= 14 ? 'Pending ML Training' : 'Pending (Needs 14+ Days)',
+    accuracyStatus: n >= 14 ? 'Statistical Holdout Only (ML Inactive)' : 'Pending (Needs 14+ Days)',
     requiredDaysForValidation: 14,
     additionalDaysNeededForValidation: Math.max(0, 14 - n),
+    dampingPhi,
     trainSize,
     testSize: k,
     testActuals,
     testPredictions: forecast,
     metrics,
+    formulationComparison: {
+      damped: {
+        phi: dampingPhi,
+        predictions: forecast,
+        mae: metrics.mae,
+        rmse: metrics.rmse,
+        wape: metrics.wape,
+        normalizedAccuracy: metrics.normalizedAccuracy,
+      },
+      undamped: {
+        phi: 1.0,
+        predictions: undampedForecast,
+        mae: undampedMetrics.mae,
+        rmse: undampedMetrics.rmse,
+        wape: undampedMetrics.wape,
+        normalizedAccuracy: undampedMetrics.normalizedAccuracy,
+      },
+    },
   };
 };
 
@@ -340,6 +405,7 @@ export const calculateUncertaintyBands = (forecastValues = [], residualStdError 
  * @param {number} params.reorderThreshold - Reorder safety point
  * @param {number} params.leadTimeDays - Supplier replenishment delay
  * @param {number} params.horizon - Forecast horizon days (e.g. 7, 14, 30)
+ * @param {number} params.phi - Damped trend parameter (default 0.5)
  * @returns {object}
  */
 export const evaluateProductDemandRisk = ({
@@ -348,6 +414,7 @@ export const evaluateProductDemandRisk = ({
   reorderThreshold = 10,
   leadTimeDays = 7,
   horizon = 7,
+  phi = DEFAULT_DAMPING_PHI,
 }) => {
   const { series, distinctRecordedDays } = alignDailyTimeSeries(
     salesRecords.map((r) => ({ date: r.date, amount: r.quantity }))
@@ -385,11 +452,11 @@ export const evaluateProductDemandRisk = ({
   const safeHorizon = Math.max(1, Number(horizon) || 7);
   const operationalLeadTime = Math.max(1, Number(leadTimeDays) || 7);
 
-  const { forecast } = calculateHoltLinear(values, safeHorizon, 0.35, 0.1);
+  const { forecast } = calculateHoltLinear(values, safeHorizon, 0.35, 0.1, phi);
   const { forecast: leadTimeForecast } =
     operationalLeadTime === safeHorizon
       ? { forecast }
-      : calculateHoltLinear(values, operationalLeadTime, 0.35, 0.1);
+      : calculateHoltLinear(values, operationalLeadTime, 0.35, 0.1, phi);
 
   const totalProjectedDemand = Number(
     forecast.reduce((sum, v) => sum + v, 0).toFixed(1)

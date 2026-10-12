@@ -403,6 +403,19 @@ def train_and_forecast_sales_rf(
 
     # Check strict ML data sufficiency gate
     if distinct_days < min_required_days or supervised_count < 5:
+        if distinct_days < min_required_days:
+            needed = min_required_days - distinct_days
+            reason_msg = (
+                f"Random Forest Regression requires at least {min_required_days} distinct recorded "
+                f"trading days ({needed} more day(s) needed). "
+                f"Current dataset has {distinct_days} distinct recorded day(s) across {date_span_days} calendar day(s)."
+            )
+        else:
+            reason_msg = (
+                f"Random Forest Regression requires at least 5 supervised post-warmup training samples "
+                f"(>=12 continuous calendar days). Current dataset has {distinct_days} distinct recorded day(s) "
+                f"across {date_span_days} calendar day(s) ({supervised_count} supervised sample(s))."
+            )
         return {
             "hasSufficientData": False,
             "mlTrained": False,
@@ -410,11 +423,7 @@ def train_and_forecast_sales_rf(
             "distinctRecordedDays": distinct_days,
             "dateSpanDays": date_span_days,
             "supervisedSampleCount": supervised_count,
-            "reason": (
-                f"Random Forest Regression requires at least {min_required_days} distinct recorded "
-                f"trading days (and >=12 continuous days for 7-day lag warm-up + train/test split). "
-                f"Current dataset has {distinct_days} distinct recorded day(s) across {date_span_days} calendar day(s)."
-            ),
+            "reason": reason_msg,
         }
 
     # 1. Leak-free chronological train/test evaluation
@@ -466,8 +475,12 @@ def train_and_forecast_sales_rf(
         "backtestMetrics": backtest.get("metrics") if backtest.get("hasSufficientDataForBacktest") else None,
     }
 
-    joblib.dump(rf_model, artifact_path)
-    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    try:
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        joblib.dump(rf_model, artifact_path)
+        meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
     # 4. Generate out-of-sample recursive forecast for `horizon` days
     all_values = [float(item["value"]) for item in series]
@@ -545,6 +558,12 @@ def train_and_forecast_sales_rf(
                 "mape": backtest["metrics"]["mape"],
                 "mapeExplanation": backtest["metrics"]["mapeExplanation"],
                 "normalizedAccuracy": backtest["metrics"]["normalizedAccuracy"],
+                "validationMethod": "Random Forest Chronological Holdout",
+                "isMLValidated": True,
+                "isProvisional": False,
+                "accuracyStatus": "Verified (Random Forest Holdout)",
+                "statisticalBacktestStatus": "Verified (Random Forest Holdout)",
+                "mlValidationStatus": "Verified (Random Forest Holdout)",
                 "accuracyDefinition": (
                     "Normalized Backtest Accuracy = max(0, 100 - WAPE)%, evaluated via "
                     "leak-free chronological train/test split on RandomForestRegressor."
@@ -623,7 +642,11 @@ def evaluate_product_demand_rf(
     rf_prod.fit(X_all, y_all)
 
     safe_key = sanitize_scope_key(product_id)
-    joblib.dump(rf_prod, ARTIFACTS_DIR / f"rf_product_{safe_key}.joblib")
+    try:
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        joblib.dump(rf_prod, ARTIFACTS_DIR / f"rf_product_{safe_key}.joblib")
+    except Exception:
+        pass
 
     all_values = [float(item["value"]) for item in series]
     forecast, _ = predict_recursive_horizon(

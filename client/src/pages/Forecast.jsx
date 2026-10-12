@@ -58,6 +58,64 @@ const Forecast = () => {
     fetchData(h);
   };
 
+  // Derive explicit, non-contradictory ML and statistical status fields
+  const mlMeta = salesForecastData?.mlMetadata || {};
+  const modelEval = salesForecastData?.modelEvaluation || null;
+  const distinctRecordedDays =
+    salesForecastData?.historicalCoverage?.distinctRecordedDays ??
+    mlMeta.distinctRecordedDays ??
+    salesForecastData?.distinctRecordedDays ??
+    0;
+  const minRequiredDaysForML =
+    mlMeta.minRequiredDaysForML ??
+    salesForecastData?.minRequiredDaysForML ??
+    14;
+  const meetsMinDaysForML =
+    mlMeta.meetsMinDaysRequirement !== undefined
+      ? Boolean(mlMeta.meetsMinDaysRequirement)
+      : distinctRecordedDays >= minRequiredDaysForML;
+  const additionalDaysNeededForML =
+    mlMeta.additionalDaysNeededForML !== undefined
+      ? Number(mlMeta.additionalDaysNeededForML)
+      : Math.max(0, minRequiredDaysForML - distinctRecordedDays);
+  const mlAttempted =
+    mlMeta.mlAttempted !== undefined
+      ? Boolean(mlMeta.mlAttempted)
+      : meetsMinDaysForML;
+  const mlSucceeded =
+    mlMeta.mlSucceeded !== undefined
+      ? Boolean(mlMeta.mlSucceeded)
+      : Boolean(mlMeta.mlActive);
+  const mlActive = Boolean(mlMeta.mlActive && mlSucceeded);
+  const mlServiceOnline = Boolean(mlMeta.mlServiceOnline);
+  const isMLValidated = Boolean(
+    mlActive &&
+      modelEval &&
+      modelEval.isMLValidated !== false &&
+      modelEval.normalizedAccuracy !== undefined
+  );
+  const statisticalBacktestStatus =
+    mlMeta.statisticalBacktestStatus ||
+    modelEval?.statisticalBacktestStatus ||
+    (modelEval
+      ? meetsMinDaysForML
+        ? 'Verified (Statistical Holdout)'
+        : 'Provisional (Statistical Holdout)'
+      : 'Insufficient Data');
+  const mlValidationStatus =
+    mlMeta.mlValidationStatus ||
+    modelEval?.mlValidationStatus ||
+    (isMLValidated
+      ? 'Verified (Random Forest Holdout)'
+      : meetsMinDaysForML
+        ? 'Unavailable (Random Forest Fallback)'
+        : `Pending (${additionalDaysNeededForML} More Day${additionalDaysNeededForML === 1 ? '' : 's'} Needed)`);
+  const fallbackReasonText =
+    mlMeta.fallbackReason ||
+    (meetsMinDaysForML
+      ? `Store meets the ${minRequiredDaysForML}-day minimum (${distinctRecordedDays} distinct trading days recorded) and Random Forest training was attempted, but did not succeed. Using Holt's Linear Exponential Smoothing statistical fallback.`
+      : `Store has ${distinctRecordedDays} distinct recorded trading days; at least ${minRequiredDaysForML} distinct days (${additionalDaysNeededForML} more day${additionalDaysNeededForML === 1 ? '' : 's'} needed) are required before Random Forest training is attempted. Using Holt's Linear Exponential Smoothing statistical projection.`);
+
   // Prepare combined timeline dataset for Recharts: Historical Actuals + Future Forecast
   const combinedTimeline = [];
   if (salesForecastData && salesForecastData.hasSufficientData) {
@@ -178,21 +236,38 @@ const Forecast = () => {
               Predictive Sales & Demand Intelligence
             </h1>
             {salesForecastData && (
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  padding: '0.2rem 0.65rem',
-                  borderRadius: '9999px',
-                  backgroundColor: salesForecastData?.mlMetadata?.mlActive ? '#dcfce7' : '#eff6ff',
-                  color: salesForecastData?.mlMetadata?.mlActive ? '#166534' : '#1d4ed8',
-                  border: `1px solid ${salesForecastData?.mlMetadata?.mlActive ? '#bbf7d0' : '#bfdbfe'}`,
-                }}
-              >
-                {salesForecastData?.mlMetadata?.mlActive
-                  ? '🧠 AI Trend & Demand Model'
-                  : '📐 Historical Trend Projection'}
-              </span>
+              <>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '0.2rem 0.65rem',
+                    borderRadius: '9999px',
+                    backgroundColor: mlActive ? '#dcfce7' : mlAttempted ? '#fef3c7' : '#eff6ff',
+                    color: mlActive ? '#166534' : mlAttempted ? '#b45309' : '#1d4ed8',
+                    border: `1px solid ${mlActive ? '#bbf7d0' : mlAttempted ? '#fde68a' : '#bfdbfe'}`,
+                  }}
+                >
+                  {mlActive
+                    ? '🧠 Random Forest Model Active'
+                    : mlAttempted
+                      ? '📐 Statistical Fallback (RF Inactive)'
+                      : '📐 Historical Trend Baseline'}
+                </span>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '0.2rem 0.65rem',
+                    borderRadius: '9999px',
+                    backgroundColor: mlServiceOnline ? '#dcfce7' : '#f1f5f9',
+                    color: mlServiceOnline ? '#166534' : '#475569',
+                    border: `1px solid ${mlServiceOnline ? '#bbf7d0' : '#e2e8f0'}`,
+                  }}
+                >
+                  {mlServiceOnline ? '🟢 Python ML Service Online' : '⚪ Python ML Service Offline'}
+                </span>
+              </>
             )}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '680px' }}>
@@ -376,13 +451,15 @@ const Forecast = () => {
                 {formatCurrency(salesForecastData?.totalProjectedRevenue || 0)}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                {salesForecastData?.mlMetadata?.mlActive
-                  ? '🧠 AI multi-factor revenue projection'
-                  : `📐 Historical trend fallback (${salesForecastData?.historicalCoverage?.distinctRecordedDays || 0}/14 days)`}
+                {mlActive
+                  ? `🧠 Random Forest projection (${distinctRecordedDays} trading days)`
+                  : meetsMinDaysForML
+                    ? `📐 Statistical Holt fallback (${distinctRecordedDays} trading days — min ${minRequiredDaysForML} met)`
+                    : `📐 Statistical trend baseline (${distinctRecordedDays}/${minRequiredDaysForML} days for ML)`}
               </p>
             </div>
 
-            {/* Forecast Accuracy Score */}
+            {/* Forecast Reliability & Validation Status (Separated ML vs Statistical) */}
             <div
               style={{
                 backgroundColor: 'var(--bg-card)',
@@ -397,20 +474,34 @@ const Forecast = () => {
               </span>
               <h3
                 style={{
-                  fontSize: salesForecastData?.mlMetadata?.mlActive ? '1.65rem' : '1.35rem',
+                  fontSize: isMLValidated ? '1.65rem' : '1.15rem',
                   fontWeight: 800,
                   marginTop: '0.25rem',
-                  color: salesForecastData?.mlMetadata?.mlActive ? 'var(--success)' : '#d97706',
+                  color: isMLValidated ? 'var(--success)' : '#d97706',
                 }}
               >
-                {salesForecastData?.mlMetadata?.mlActive && salesForecastData?.modelEvaluation?.normalizedAccuracy !== undefined
-                  ? `${salesForecastData.modelEvaluation.normalizedAccuracy}%`
-                  : (salesForecastData?.modelEvaluation?.accuracyStatus || 'Pending (Needs 14+ Days)')}
+                {isMLValidated
+                  ? `${modelEval.normalizedAccuracy}%`
+                  : meetsMinDaysForML
+                    ? 'Pending ML Validation (Fallback Active)'
+                    : `Pending (Needs ${minRequiredDaysForML}+ Days)`}
               </h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                {salesForecastData?.mlMetadata?.mlActive
-                  ? 'Validated on chronological holdout backtest'
-                  : `${Math.max(0, 14 - (salesForecastData?.historicalCoverage?.distinctRecordedDays || 0))} more trading days needed for AI validation`}
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                {isMLValidated
+                  ? `ML Holdout Verified (${modelEval.backtestTestDays}d test) | Statistical Backtest: Verified`
+                  : meetsMinDaysForML
+                    ? `ML Eval: Unavailable (RF did not run) | Statistical Holdout: ${
+                        modelEval?.normalizedAccuracy !== undefined
+                          ? `${modelEval.normalizedAccuracy}% (${statisticalBacktestStatus})`
+                          : statisticalBacktestStatus
+                      }`
+                    : `${additionalDaysNeededForML} more trading day${
+                        additionalDaysNeededForML === 1 ? '' : 's'
+                      } needed for ML training | Statistical Holdout: ${
+                        modelEval?.normalizedAccuracy !== undefined
+                          ? `${modelEval.normalizedAccuracy}% (Provisional)`
+                          : 'Provisional'
+                      }`}
               </p>
             </div>
 
@@ -428,14 +519,16 @@ const Forecast = () => {
                 Average Daily Variance
               </span>
               <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: 'var(--text-main)' }}>
-                {salesForecastData?.modelEvaluation?.mae !== undefined
-                  ? `${formatCurrency(salesForecastData.modelEvaluation.mae)}${!salesForecastData?.mlMetadata?.mlActive ? '*' : ''}`
+                {modelEval?.mae !== undefined
+                  ? `${formatCurrency(modelEval.mae)}${!isMLValidated ? '*' : ''}`
                   : 'N/A'}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                {salesForecastData?.mlMetadata?.mlActive
-                  ? 'Holdout test error (MAE) on recent sales'
-                  : `*Provisional variance (${salesForecastData?.historicalCoverage?.distinctRecordedDays || 0}/14 days recorded)`}
+                {isMLValidated
+                  ? `Random Forest holdout MAE (WAPE: ${modelEval.wape}%)`
+                  : meetsMinDaysForML
+                    ? `*Statistical Holt holdout MAE (WAPE: ${modelEval?.wape ?? 'N/A'}% across ${distinctRecordedDays} days)`
+                    : `*Provisional statistical holdout MAE (${distinctRecordedDays}/${minRequiredDaysForML} days recorded)`}
               </p>
             </div>
 
@@ -462,44 +555,94 @@ const Forecast = () => {
           </section>
 
           {/* Statistical Fallback Informational Banner */}
-          {!salesForecastData?.mlMetadata?.mlActive && (
+          {!mlActive && (
             <div
               style={{
-                backgroundColor: '#eff6ff',
-                border: '1px solid #bfdbfe',
+                backgroundColor: meetsMinDaysForML ? '#fffbeb' : '#eff6ff',
+                border: `1px solid ${meetsMinDaysForML ? '#fde68a' : '#bfdbfe'}`,
                 borderRadius: 'var(--radius-md)',
-                padding: '0.85rem 1.25rem',
+                padding: '0.95rem 1.25rem',
                 marginBottom: '1.5rem',
                 fontSize: '0.85rem',
-                color: '#1e40af',
+                color: meetsMinDaysForML ? '#92400e' : '#1e40af',
                 display: 'flex',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 justifyContent: 'space-between',
                 flexWrap: 'wrap',
-                gap: '0.75rem',
+                gap: '0.85rem',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <span style={{ fontSize: '1.25rem' }}>ℹ️</span>
-                <div>
-                  <strong>Provisional Trend Projection Active:</strong> Currently using statistical Holt exponential smoothing because this store has{' '}
-                  <strong>{salesForecastData?.historicalCoverage?.distinctRecordedDays || 0} distinct trading days</strong> recorded.{' '}
-                  At least <strong>14 distinct days</strong> ({Math.max(0, 14 - (salesForecastData?.historicalCoverage?.distinctRecordedDays || 0))} more days needed) are required to train the AI Random Forest model and compute verified reliability scores.
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem', flex: '1 1 540px' }}>
+                <span style={{ fontSize: '1.25rem', lineHeight: 1.2 }}>
+                  {meetsMinDaysForML ? '⚠️' : 'ℹ️'}
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  <div>
+                    <strong>
+                      {meetsMinDaysForML
+                        ? 'Statistical Fallback Active (Random Forest Training Did Not Succeed): '
+                        : 'Provisional Trend Projection Active: '}
+                    </strong>
+                    {fallbackReasonText}
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '0.85rem',
+                      fontSize: '0.78rem',
+                      opacity: 0.95,
+                    }}
+                  >
+                    <span>
+                      <strong>Distinct Trading Days:</strong> {distinctRecordedDays} recorded (Min Required: {minRequiredDaysForML}{' '}
+                      {meetsMinDaysForML
+                        ? '— Requirement Met'
+                        : `— ${additionalDaysNeededForML} more day${additionalDaysNeededForML === 1 ? '' : 's'} needed`})
+                    </span>
+                    <span>
+                      <strong>RF Attempted:</strong> {mlAttempted ? 'Yes' : 'No (Below 14-Day Gate)'}
+                    </span>
+                    <span>
+                      <strong>RF Succeeded:</strong> {mlSucceeded ? 'Yes' : 'No'}
+                    </span>
+                    <span>
+                      <strong>Statistical Backtest:</strong> {statisticalBacktestStatus}
+                    </span>
+                    <span>
+                      <strong>ML Evaluation:</strong> {mlValidationStatus}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  padding: '0.2rem 0.6rem',
-                  borderRadius: '9999px',
-                  backgroundColor: salesForecastData?.mlMetadata?.mlServiceOnline ? '#dcfce7' : '#f1f5f9',
-                  color: salesForecastData?.mlMetadata?.mlServiceOnline ? '#166534' : '#475569',
-                  border: `1px solid ${salesForecastData?.mlMetadata?.mlServiceOnline ? '#bbf7d0' : '#e2e8f0'}`,
-                }}
-              >
-                {salesForecastData?.mlMetadata?.mlServiceOnline ? '🟢 Python ML Service Ready' : '⚪ Python ML Service Standby'}
-              </span>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '9999px',
+                    backgroundColor: mlServiceOnline ? '#dcfce7' : '#f1f5f9',
+                    color: mlServiceOnline ? '#166534' : '#475569',
+                    border: `1px solid ${mlServiceOnline ? '#bbf7d0' : '#e2e8f0'}`,
+                  }}
+                >
+                  {mlServiceOnline ? '🟢 Python ML Service: Online' : '⚪ Python ML Service: Offline'}
+                </span>
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '9999px',
+                    backgroundColor: mlAttempted ? '#fef3c7' : '#e0f2fe',
+                    color: mlAttempted ? '#b45309' : '#0369a1',
+                    border: `1px solid ${mlAttempted ? '#fde68a' : '#bae6fd'}`,
+                  }}
+                >
+                  {mlAttempted ? '📐 Model: Holt Fallback (RF Failed)' : '📐 Model: Holt Baseline (<14d)'}
+                </span>
+              </div>
             </div>
           )}
 

@@ -138,20 +138,26 @@ async function runMLIntegrationTests() {
       '6-day dataset uses Holt\'s Linear Exponential Smoothing statistical fallback'
     );
     assert(
-      sparseForecastRes.body.data.mlMetadata?.mlActive === false,
-      '6-day dataset sets mlMetadata.mlActive = false (< 14 days)'
+      sparseForecastRes.body.data.mlMetadata?.mlActive === false &&
+        sparseForecastRes.body.data.mlMetadata?.mlAttempted === false &&
+        sparseForecastRes.body.data.mlMetadata?.mlSucceeded === false,
+      '6-day dataset sets mlMetadata.mlActive = false, mlAttempted = false, mlSucceeded = false (< 14 days)'
+    );
+    assert(
+      sparseForecastRes.body.data.mlMetadata?.fallbackReason.includes('8 more days needed'),
+      '6-day fallbackReason accurately states 8 more days needed for 14-day threshold'
     );
     console.log(
       `  ℹ️  6-Day Real-DB Equivalent Holt Backtest Metrics: MAE=$${sparseForecastRes.body.data.modelEvaluation?.mae}, RMSE=$${sparseForecastRes.body.data.modelEvaluation?.rmse}, WAPE=${sparseForecastRes.body.data.modelEvaluation?.wape}%, NormalizedAccuracy=${sparseForecastRes.body.data.modelEvaluation?.normalizedAccuracy}%`
     );
 
     // =========================================================================
-    // CASE 2: Sufficient Multi-Week History (24 trading days, 25 transactions) -> Trained ML Active
+    // CASE 2: Sufficient Multi-Week History (30 trading days, 31 transactions) -> Trained ML Active
     // =========================================================================
-    console.log('\n--- 2. Multi-Week History (24 Days / 25 Transactions -> Random Forest & Isolation Forest Active) ---');
+    console.log('\n--- 2. Multi-Week History (30 Days / 31 Transactions -> Random Forest & Isolation Forest Active) ---');
     await Sale.deleteMany({ userId });
 
-    for (let day = 1; day <= 24; day++) {
+    for (let day = 1; day <= 30; day++) {
       const dateStr = `2026-09-${String(day).padStart(2, '0')}T12:00:00.000Z`;
       const isWeekend = day % 7 === 5 || day % 7 === 6;
       const qty = isWeekend ? 8 : 4 + (day % 2);
@@ -193,14 +199,17 @@ async function runMLIntegrationTests() {
       .get('/api/forecast/sales?horizon=7')
       .set('Authorization', `Bearer ${token}`);
 
-    assert(mlForecastRes.status === 200, '24-day ML forecast returns HTTP 200');
+    assert(mlForecastRes.status === 200, '30-day ML forecast returns HTTP 200');
     assert(
       mlForecastRes.body.data.algorithm === 'Random Forest Regression (scikit-learn)',
       `Active algorithm is '${mlForecastRes.body.data.algorithm}'`
     );
     assert(
-      mlForecastRes.body.data.mlMetadata?.mlActive === true,
-      'mlMetadata.mlActive is true for 24-day dataset'
+      mlForecastRes.body.data.mlMetadata?.mlActive === true &&
+        mlForecastRes.body.data.mlMetadata?.mlAttempted === true &&
+        mlForecastRes.body.data.mlMetadata?.mlSucceeded === true &&
+        mlForecastRes.body.data.mlMetadata?.distinctRecordedDays === 30,
+      'mlMetadata reports mlActive=true, mlAttempted=true, mlSucceeded=true, distinctRecordedDays=30'
     );
     assert(
       mlForecastRes.body.data.predictions?.length === 7,
@@ -208,8 +217,10 @@ async function runMLIntegrationTests() {
     );
     assert(
       mlForecastRes.body.data.modelEvaluation?.mae !== undefined &&
-        mlForecastRes.body.data.modelEvaluation?.rmse !== undefined,
-      `Chronological backtest metrics computed (MAE=$${mlForecastRes.body.data.modelEvaluation?.mae}, RMSE=$${mlForecastRes.body.data.modelEvaluation?.rmse}, WAPE=${mlForecastRes.body.data.modelEvaluation?.wape}%)`
+        mlForecastRes.body.data.modelEvaluation?.rmse !== undefined &&
+        mlForecastRes.body.data.modelEvaluation?.isMLValidated === true &&
+        mlForecastRes.body.data.modelEvaluation?.accuracyStatus === 'Verified (Random Forest Holdout)',
+      `Chronological RF backtest metrics verified (MAE=$${mlForecastRes.body.data.modelEvaluation?.mae}, RMSE=$${mlForecastRes.body.data.modelEvaluation?.rmse}, WAPE=${mlForecastRes.body.data.modelEvaluation?.wape}%)`
     );
     assert(
       Boolean(mlForecastRes.body.data.statisticalBaselineComparison),
@@ -276,9 +287,9 @@ async function runMLIntegrationTests() {
     );
 
     // =========================================================================
-    // CASE 3: Graceful Offline Fallback when ML Service is Unreachable
+    // CASE 3: Graceful Offline Fallback when ML Service is Unreachable (30 Days)
     // =========================================================================
-    console.log('\n--- 3. Graceful Statistical Fallback When Python ML Service Is Offline ---');
+    console.log('\n--- 3. Graceful Statistical Fallback When Python ML Service Is Offline (30 Days) ---');
     process.env.ML_SERVICE_URL = 'http://127.0.0.1:59999'; // unreachable port
     process.env.ML_SERVICE_TIMEOUT_MS = '500';
 
@@ -293,8 +304,20 @@ async function runMLIntegrationTests() {
     );
     assert(
       offlineForecastRes.body.data.mlMetadata?.mlActive === false &&
+        offlineForecastRes.body.data.mlMetadata?.mlAttempted === true &&
+        offlineForecastRes.body.data.mlMetadata?.mlSucceeded === false &&
         offlineForecastRes.body.data.mlMetadata?.mlServiceOnline === false,
-      'Reports mlServiceOnline = false and fallback reason in mlMetadata'
+      'Reports mlAttempted=true, mlSucceeded=false, mlServiceOnline=false for 30-day offline fallback'
+    );
+    assert(
+      offlineForecastRes.body.data.mlMetadata?.fallbackReason.includes('30 distinct trading days') &&
+        !offlineForecastRes.body.data.mlMetadata?.fallbackReason.includes('more days needed'),
+      '30-day offline fallbackReason accurately states 30 days recorded and never claims more days are needed'
+    );
+    assert(
+      offlineForecastRes.body.data.modelEvaluation?.isMLValidated === false &&
+        offlineForecastRes.body.data.modelEvaluation?.accuracyStatus === 'Statistical Holdout Only (ML Inactive)',
+      '30-day offline fallback does not report a verified ML reliability score'
     );
 
     const offlineTxRes = await request(app)
