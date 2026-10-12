@@ -13,8 +13,18 @@ import simulationRoutes from './routes/simulationRoutes.js';
 import recommendationRoutes from './routes/recommendationRoutes.js';
 import scenarioRoutes from './routes/scenarioRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import Sale from './models/Sale.js';
+import { alignDailyTimeSeries } from './utils/forecastingEngine.js';
+import {
+  MIN_DAYS_FOR_RF_FORECAST,
+  checkMLServiceHealth,
+  getMLCandidateBaseUrls,
+  getMLServiceBaseUrl,
+  requestMLSalesForecast,
+} from './services/mlServiceClient.js';
 
 const app = express();
+let lastMlKeepWarmAt = 0;
 
 // Security Middlewares
 app.use(
@@ -71,14 +81,106 @@ app.use(
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Proactive non-blocking keep-warm hook for the Python ML service in production
+app.use((req, _res, next) => {
+  if (
+    process.env.NODE_ENV === 'production' &&
+    Date.now() - lastMlKeepWarmAt > 4 * 60 * 1000
+  ) {
+    lastMlKeepWarmAt = Date.now();
+    checkMLServiceHealth().catch(() => {});
+  }
+  next();
+});
+
 // Health Check Endpoint
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
+app.get('/api/health', async (req, res) => {
+  const basePayload = {
     status: 'success',
     message: 'AI-Powered Business & Decision Intelligence Platform API is running',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-  });
+  };
+
+  if (req.query.ml !== 'true') {
+    return res.status(200).json(basePayload);
+  }
+
+  try {
+    const mlHealth = await checkMLServiceHealth();
+    let storeVerification = null;
+
+    // Read-only verification on the store with the most trading days (exposes zero PII)
+    const userGroups = await Sale.aggregate([
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 },
+    ]);
+
+    for (const grp of userGroups) {
+      const sales = await Sale.find({ userId: grp._id }).sort({ date: 1 }).lean();
+      const records = sales.map((s) => ({ date: s.date, amount: s.totalRevenue }));
+      const aligned = alignDailyTimeSeries(records);
+      if (aligned.distinctRecordedDays >= MIN_DAYS_FOR_RF_FORECAST) {
+        const horizons = {};
+        for (const h of [7, 14, 30]) {
+          const mlRes = await requestMLSalesForecast({
+            records,
+            horizon: h,
+            scopeId: 'health_verify',
+            minRequiredDays: MIN_DAYS_FOR_RF_FORECAST,
+          });
+          const rfOk = Boolean(
+            mlRes.serviceOnline && !mlRes.error && mlRes.data && mlRes.data.mlTrained === true
+          );
+          horizons[`${h}d`] = {
+            mlActive: rfOk,
+            mlTrained: Boolean(mlRes.data?.mlTrained),
+            mlServiceOnline: Boolean(mlRes.serviceOnline),
+            algorithm: rfOk
+              ? mlRes.data.algorithm
+              : "Holt's Linear Exponential Smoothing",
+            predictionsCount: mlRes.data?.predictions?.length || 0,
+            totalProjectedRevenue: mlRes.data?.totalProjectedRevenue ?? null,
+            modelEvaluation: mlRes.data?.modelEvaluation
+              ? {
+                  mae: mlRes.data.modelEvaluation.mae,
+                  rmse: mlRes.data.modelEvaluation.rmse,
+                  wape: mlRes.data.modelEvaluation.wape,
+                  normalizedAccuracy: mlRes.data.modelEvaluation.normalizedAccuracy,
+                  isMLValidated: mlRes.data.modelEvaluation.isMLValidated,
+                }
+              : null,
+            error: mlRes.error || null,
+          };
+        }
+        storeVerification = {
+          distinctRecordedDays: aligned.distinctRecordedDays,
+          totalCalendarDays: aligned.dateSpanDays,
+          horizons,
+        };
+        break;
+      }
+    }
+
+    return res.status(200).json({
+      ...basePayload,
+      mlService: {
+        configuredUrl: getMLServiceBaseUrl(),
+        candidateUrls: getMLCandidateBaseUrls(),
+        health: mlHealth,
+        storeVerification,
+      },
+    });
+  } catch (err) {
+    return res.status(200).json({
+      ...basePayload,
+      mlService: {
+        online: false,
+        error: err?.message || 'Health check failed',
+      },
+    });
+  }
 });
 
 // Mount Module Routes

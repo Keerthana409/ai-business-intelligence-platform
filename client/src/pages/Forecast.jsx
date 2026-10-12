@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ResponsiveContainer,
@@ -24,10 +24,13 @@ const Forecast = () => {
 
   const [salesForecastData, setSalesForecastData] = useState(null);
   const [inventoryRisks, setInventoryRisks] = useState([]);
+  const coldStartRetriedRef = useRef(false);
 
   // Fetch forecast data
-  const fetchData = useCallback(async (selectedHorizon = horizon) => {
-    setLoading(true);
+  const fetchData = useCallback(async (selectedHorizon = horizon, silent = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const [salesRes, riskRes] = await Promise.all([
@@ -43,9 +46,13 @@ const Forecast = () => {
       }
     } catch (err) {
       console.error('Failed to load forecasting intelligence:', err);
-      setError(err.response?.data?.message || 'Failed to generate predictive intelligence.');
+      if (!silent) {
+        setError(err.response?.data?.message || 'Failed to generate predictive intelligence.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [horizon]);
 
@@ -88,6 +95,24 @@ const Forecast = () => {
       : Boolean(mlMeta.mlActive);
   const mlActive = Boolean(mlMeta.mlActive && mlSucceeded);
   const mlServiceOnline = Boolean(mlMeta.mlServiceOnline);
+
+  // If the Python ML service was waking up from a cold start on first load, retry once silently
+  useEffect(() => {
+    if (
+      salesForecastData?.hasSufficientData &&
+      mlAttempted &&
+      !mlActive &&
+      !mlServiceOnline &&
+      !coldStartRetriedRef.current
+    ) {
+      coldStartRetriedRef.current = true;
+      const timer = setTimeout(() => {
+        fetchData(horizon, true);
+      }, 4500);
+      return () => clearTimeout(timer);
+    }
+  }, [salesForecastData, mlAttempted, mlActive, mlServiceOnline, fetchData, horizon]);
+
   const isMLValidated = Boolean(
     mlActive &&
       modelEval &&
@@ -135,10 +160,7 @@ const Forecast = () => {
       });
     });
 
-    // Anchor point: bridge the last historical day to first forecast day for continuity
-    const lastHistorical = combinedTimeline[combinedTimeline.length - 1];
-
-    (salesForecastData.predictions || []).forEach((pred, idx) => {
+    (salesForecastData.predictions || []).forEach((pred) => {
       combinedTimeline.push({
         date: pred.date,
         type: 'forecast',

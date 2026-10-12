@@ -29,6 +29,9 @@ export const getMLServiceBaseUrl = () => {
       cleaned = `${isLocal ? 'http' : 'https'}://${cleaned}`;
     }
 
+    // Always use HTTPS for *.onrender.com services to avoid HTTP->HTTPS POST redirect issues
+    cleaned = cleaned.replace(/^http:\/\/([^/]+\.onrender\.com)/i, 'https://$1');
+
     if (process.env.NODE_ENV === 'production') {
       const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleaned);
       const isSelfBackend = /ai-business-intelligence-platform/i.test(cleaned);
@@ -72,7 +75,7 @@ export const getMLTimeoutMs = () => {
   if (process.env.NODE_ENV === 'test') {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 5000;
   }
-  const minSafeTimeout = process.env.NODE_ENV === 'production' ? 20000 : 15000;
+  const minSafeTimeout = process.env.NODE_ENV === 'production' ? 25000 : 15000;
   if (Number.isFinite(parsed) && parsed > 0) {
     return Math.max(minSafeTimeout, parsed);
   }
@@ -97,9 +100,9 @@ function buildPayloadSummary(payload) {
 /**
  * Check Python ML Service health status across candidate URLs
  */
-export async function checkMLServiceHealth(specificBaseUrl = null) {
+export async function checkMLServiceHealth(specificBaseUrl = null, customTimeoutMs = null) {
   const candidates = specificBaseUrl ? [specificBaseUrl] : getMLCandidateBaseUrls();
-  const timeoutMs = getMLTimeoutMs();
+  const timeoutMs = customTimeoutMs || getMLTimeoutMs();
 
   for (const baseUrl of candidates) {
     const controller = new AbortController();
@@ -116,7 +119,7 @@ export async function checkMLServiceHealth(specificBaseUrl = null) {
       const body = await res.json();
       const isHealthy = Boolean(body && (body.status === 'ok' || body.service));
       if (isHealthy) {
-        return { online: true, ...(body || {}) };
+        return { online: true, baseUrl, ...(body || {}) };
       }
     } catch {
       // Try next candidate URL
@@ -259,12 +262,12 @@ async function postToMLService(endpointPath, payload) {
     // Outside of test mode, if a remote Render service timed out or returned 502/503/504 during cold start, wake /health and retry once
     if (
       process.env.NODE_ENV !== 'test' &&
-      baseUrl === DEFAULT_PROD_ML_URL &&
+      (baseUrl === DEFAULT_PROD_ML_URL || /\.onrender\.com/i.test(baseUrl)) &&
       (result.isTimeout || [502, 503, 504].includes(result.httpStatus))
     ) {
-      const healthWake = await checkMLServiceHealth(baseUrl);
+      const healthWake = await checkMLServiceHealth(baseUrl, 40000);
       if (healthWake.online) {
-        result = await postSingleAttempt(baseUrl, endpointPath, payload, timeoutMs);
+        result = await postSingleAttempt(baseUrl, endpointPath, payload, Math.max(timeoutMs, 25000));
         if (result.requestSucceeded || result.serviceOnline) {
           return {
             serviceOnline: result.serviceOnline,
