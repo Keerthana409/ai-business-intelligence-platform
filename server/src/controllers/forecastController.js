@@ -95,52 +95,50 @@ export const getSalesForecast = async (req, res) => {
       holtPredictions.reduce((sum, p) => sum + p.forecastRevenue, 0).toFixed(2)
     );
 
-    // 2. Evaluate eligibility for trained Random Forest Regression (requires >= 14 distinct recorded days)
+    // 2. Evaluate eligibility and query Python ML service
     let mlServiceOnline = false;
     let fallbackReason = null;
 
-    if (distinctRecordedDays >= MIN_DAYS_FOR_RF_FORECAST) {
-      const mlRes = await requestMLSalesForecast({
-        records,
-        horizon,
-        scopeId: String(req.user.id),
-        minRequiredDays: MIN_DAYS_FOR_RF_FORECAST,
-      });
+    // Always query Python ML service to evaluate sales records
+    const mlRes = await requestMLSalesForecast({
+      records,
+      horizon,
+      scopeId: String(req.user.id),
+      minRequiredDays: MIN_DAYS_FOR_RF_FORECAST,
+    });
 
-      mlServiceOnline = mlRes.serviceOnline;
+    mlServiceOnline = mlRes.serviceOnline;
 
-      if (mlRes.serviceOnline && mlRes.data && mlRes.data.mlTrained) {
-        const rfData = mlRes.data;
-        return res.status(200).json({
-          status: 'success',
-          data: {
-            ...rfData,
-            mlMetadata: {
-              mlActive: true,
-              mlServiceOnline: true,
-              algorithmUsed: 'Random Forest Regression (scikit-learn)',
-              minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
-              distinctRecordedDays,
-              supervisedTrainingSamples: rfData.historicalCoverage?.supervisedTrainingSamples || 0,
-              featureImportances: rfData.parameters?.featureImportances || {},
-              artifactPath: rfData.parameters?.artifactPath || null,
-              fallbackReason: null,
-            },
-            statisticalBaselineComparison: {
-              algorithm: 'Holt\'s Linear Exponential Smoothing',
-              totalProjectedRevenue: holtTotalProjectedRevenue,
-              metrics: backtest.hasSufficientDataForBacktest ? backtest.metrics : null,
-            },
+    if (mlRes.serviceOnline && mlRes.data && mlRes.data.mlTrained) {
+      const rfData = mlRes.data;
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          ...rfData,
+          mlMetadata: {
+            mlActive: true,
+            mlServiceOnline: true,
+            algorithmUsed: 'Random Forest Regression (scikit-learn)',
+            minRequiredDaysForML: MIN_DAYS_FOR_RF_FORECAST,
+            distinctRecordedDays,
+            additionalDaysNeededForML: 0,
+            supervisedTrainingSamples: rfData.historicalCoverage?.supervisedTrainingSamples || 0,
+            featureImportances: rfData.parameters?.featureImportances || {},
+            artifactPath: rfData.parameters?.artifactPath || null,
+            fallbackReason: null,
           },
-        });
-      }
-
-      fallbackReason = !mlRes.serviceOnline
-        ? `Python ML service is currently offline (${mlRes.error || 'connection refused'}). Using Holt's Linear Exponential Smoothing statistical fallback.`
-        : (mlRes.data?.reason || 'Insufficient continuous lag samples for Random Forest Regression; using statistical fallback.');
-    } else {
-      fallbackReason = `Current dataset has ${distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_RF_FORECAST} distinct days are required to train Random Forest Regression without overfitting. Retaining Holt's Linear Exponential Smoothing fallback.`;
+          statisticalBaselineComparison: {
+            algorithm: 'Holt\'s Linear Exponential Smoothing',
+            totalProjectedRevenue: holtTotalProjectedRevenue,
+            metrics: backtest.hasSufficientDataForBacktest ? backtest.metrics : null,
+          },
+        },
+      });
     }
+
+    fallbackReason = !mlRes.serviceOnline
+      ? `Python ML service is currently offline (${mlRes.error || 'connection refused'}). Using Holt's Linear Exponential Smoothing statistical fallback.`
+      : (mlRes.data?.reason || `Current dataset has ${distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_RF_FORECAST} distinct days are required to train Random Forest Regression without overfitting. Retaining Holt's Linear Exponential Smoothing fallback.`);
 
     return res.status(200).json({
       status: 'success',
@@ -166,6 +164,10 @@ export const getSalesForecast = async (req, res) => {
               mape: backtest.metrics.mape,
               mapeExplanation: backtest.metrics.mapeExplanation,
               normalizedAccuracy: backtest.metrics.normalizedAccuracy,
+              accuracyStatus: distinctRecordedDays >= 14 ? 'Verified' : 'Pending (Needs 14+ Days)',
+              isProvisional: distinctRecordedDays < 14,
+              requiredDaysForValidation: 14,
+              additionalDaysNeeded: Math.max(0, 14 - distinctRecordedDays),
               accuracyDefinition: 'Normalized Backtest Accuracy = max(0, 100 - WAPE)%, where WAPE = sum(|actual - predicted|) / sum(actual) * 100 on the holdout test period.',
               backtestTrainDays: backtest.trainSize,
               backtestTestDays: backtest.testSize,
@@ -174,11 +176,11 @@ export const getSalesForecast = async (req, res) => {
             }
           : null,
         transparency: {
-          algorithmName: 'Holt\'s Linear (Double) Exponential Smoothing',
-          formula: 'L_t = max(0, alpha*y_t + (1-alpha)*max(0, L_{t-1} + T_{t-1})) | T_t = beta*(L_t - L_{t-1}) + (1-beta)*T_{t-1} (with OLS regression initialization)',
-          uncertaintyMethod: 'Approximate Uncertainty Range (±1.96 × Residual Standard Error under empirical normality assumption; not a guaranteed confidence interval).',
-          limitations: 'Assumes recent trend trajectory continues without external macro disruptions, supplier stockouts, or unexpected emergency promotions. Reliability increases with larger sample sizes (30+ days).',
-          minimumComputationalRequirementNote: '5 distinct calendar days represents a computational minimum to seed Level and Trend recursion, not a guarantee of long-term forecast reliability.',
+          algorithmName: 'Holt\'s Linear (Double) Exponential Smoothing (Provisional Statistical Fallback)',
+          formula: 'L_t = max(0, alpha*y_t + (1-alpha)*max(0, L_{t-1} + T_{t-1})) | T_t = beta*(L_t - L_{t-1}) + (1-beta)*T_{t-1}',
+          uncertaintyMethod: 'Approximate Uncertainty Range (±1.96 × Residual Standard Error under empirical normality assumption).',
+          limitations: 'Provisional baseline projection. Long-term accuracy increases with larger sample sizes (14+ days for AI modeling).',
+          minimumComputationalRequirementNote: `Current dataset has ${distinctRecordedDays} days. Minimum 14 days required for AI Random Forest modeling (${Math.max(0, 14 - distinctRecordedDays)} more days needed).`,
         },
         mlMetadata: {
           mlActive: false,
@@ -210,7 +212,7 @@ const escapeRegex = (str = '') => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  */
 async function evaluateCatalogDemandWithML(products, userId, horizon) {
   const results = [];
-  const mlEligibleBatch = [];
+  const mlBatch = [];
 
   for (const prod of products) {
     const cleanName = (prod.name || '').trim();
@@ -234,15 +236,13 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
       horizon,
     });
 
-    if (evaluation.distinctRecordedDays >= MIN_DAYS_FOR_PRODUCT_RF) {
-      mlEligibleBatch.push({
-        productId: String(prod._id),
-        salesRecords,
-        stockQuantity: prod.stockQuantity,
-        reorderThreshold: prod.reorderThreshold,
-        leadTimeDays: prod.leadTimeDays || 7,
-      });
-    }
+    mlBatch.push({
+      productId: String(prod._id),
+      salesRecords,
+      stockQuantity: prod.stockQuantity,
+      reorderThreshold: prod.reorderThreshold,
+      leadTimeDays: prod.leadTimeDays || 7,
+    });
 
     results.push({
       productId: prod._id,
@@ -257,15 +257,18 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
         ? 'Holt\'s Linear Exponential Smoothing'
         : 'Insufficient Data',
       mlActive: false,
+      minRequiredDaysForBaseline: 3,
       minRequiredDaysForML: MIN_DAYS_FOR_PRODUCT_RF,
+      additionalDaysNeededForBaseline: Math.max(0, 3 - evaluation.distinctRecordedDays),
+      additionalDaysNeededForML: Math.max(0, MIN_DAYS_FOR_PRODUCT_RF - evaluation.distinctRecordedDays),
       ...evaluation,
     });
   }
 
-  // If any products qualify for SKU-level Random Forest Regression, query Python ML service
-  if (mlEligibleBatch.length > 0) {
+  // Always query Python ML service to evaluate all products and get ML status
+  if (mlBatch.length > 0) {
     const mlBatchRes = await requestMLProductDemandForecast({
-      products: mlEligibleBatch,
+      products: mlBatch,
       horizon,
     });
 
@@ -273,14 +276,18 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
       for (let i = 0; i < results.length; i++) {
         const pid = String(results[i].productId);
         const mlProd = mlBatchRes.data[pid];
-        if (mlProd && mlProd.mlUsed) {
-          results[i] = {
-            ...results[i],
-            ...mlProd,
-            currentStock: results[i].currentStock,
-            mlActive: true,
-            algorithm: 'Random Forest Regression (scikit-learn)',
-          };
+        if (mlProd) {
+          results[i].mlServiceOnline = true;
+          results[i].mlReason = mlProd.reason || null;
+          if (mlProd.mlUsed) {
+            results[i] = {
+              ...results[i],
+              ...mlProd,
+              currentStock: results[i].currentStock,
+              mlActive: true,
+              algorithm: 'Random Forest Regression (scikit-learn)',
+            };
+          }
         }
       }
     }
@@ -355,10 +362,12 @@ export const getInventoryRiskAnalysis = async (req, res) => {
       'Out of Stock': 1,
       'Critical Risk': 2,
       'High Risk': 3,
-      'Moderate Risk': 4,
-      'Low / Safe': 5,
-      'Zero Projected Demand': 6,
-      'Insufficient Data': 7,
+      'Low Stock (Buffer Alert)': 4,
+      'Moderate Risk': 5,
+      'Low / Safe': 6,
+      'Pending History': 7,
+      'Zero Projected Demand': 8,
+      'Insufficient Data': 9,
     };
 
     analysisResults.sort((a, b) => {

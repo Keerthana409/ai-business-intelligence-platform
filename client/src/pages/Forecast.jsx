@@ -140,11 +140,14 @@ const Forecast = () => {
       case 'Critical Risk':
         return { bg: '#ffedd5', text: '#c2410c', border: '#fdba74' };
       case 'High Risk':
+      case 'Low Stock (Buffer Alert)':
         return { bg: '#fef3c7', text: '#b45309', border: '#fde68a' };
       case 'Moderate Risk':
         return { bg: '#fef9c3', text: '#854d0e', border: '#fef08a' };
       case 'Low / Safe':
         return { bg: '#dcfce7', text: '#166534', border: '#bbf7d0' };
+      case 'Pending History':
+        return { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' };
       default:
         return { bg: '#f1f5f9', text: '#475569', border: '#e2e8f0' };
     }
@@ -353,7 +356,7 @@ const Forecast = () => {
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
               gap: '1.25rem',
-              marginBottom: '2rem',
+              marginBottom: '1.5rem',
             }}
           >
             {/* Projected Revenue */}
@@ -374,8 +377,8 @@ const Forecast = () => {
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
                 {salesForecastData?.mlMetadata?.mlActive
-                  ? 'AI multi-factor revenue projection'
-                  : 'Historical trend-adjusted projection'}
+                  ? '🧠 AI multi-factor revenue projection'
+                  : `📐 Historical trend fallback (${salesForecastData?.historicalCoverage?.distinctRecordedDays || 0}/14 days)`}
               </p>
             </div>
 
@@ -392,13 +395,22 @@ const Forecast = () => {
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
                 Forecast Reliability Score
               </span>
-              <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: 'var(--success)' }}>
-                {salesForecastData?.modelEvaluation?.normalizedAccuracy !== undefined
+              <h3
+                style={{
+                  fontSize: salesForecastData?.mlMetadata?.mlActive ? '1.65rem' : '1.35rem',
+                  fontWeight: 800,
+                  marginTop: '0.25rem',
+                  color: salesForecastData?.mlMetadata?.mlActive ? 'var(--success)' : '#d97706',
+                }}
+              >
+                {salesForecastData?.mlMetadata?.mlActive && salesForecastData?.modelEvaluation?.normalizedAccuracy !== undefined
                   ? `${salesForecastData.modelEvaluation.normalizedAccuracy}%`
-                  : 'N/A'}
+                  : (salesForecastData?.modelEvaluation?.accuracyStatus || 'Pending (Needs 14+ Days)')}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                Validated against recent trading days
+                {salesForecastData?.mlMetadata?.mlActive
+                  ? 'Validated on chronological holdout backtest'
+                  : `${Math.max(0, 14 - (salesForecastData?.historicalCoverage?.distinctRecordedDays || 0))} more trading days needed for AI validation`}
               </p>
             </div>
 
@@ -417,11 +429,13 @@ const Forecast = () => {
               </span>
               <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: 'var(--text-main)' }}>
                 {salesForecastData?.modelEvaluation?.mae !== undefined
-                  ? formatCurrency(salesForecastData.modelEvaluation.mae)
+                  ? `${formatCurrency(salesForecastData.modelEvaluation.mae)}${!salesForecastData?.mlMetadata?.mlActive ? '*' : ''}`
                   : 'N/A'}
               </h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                Typical daily difference on recent sales
+                {salesForecastData?.mlMetadata?.mlActive
+                  ? 'Holdout test error (MAE) on recent sales'
+                  : `*Provisional variance (${salesForecastData?.historicalCoverage?.distinctRecordedDays || 0}/14 days recorded)`}
               </p>
             </div>
 
@@ -439,13 +453,55 @@ const Forecast = () => {
                 Stockout Alert Items
               </span>
               <h3 style={{ fontSize: '1.65rem', fontWeight: 800, marginTop: '0.25rem', color: '#b91c1c' }}>
-                {formatNumber(inventoryRisks.filter((r) => r.status === 'Critical Risk' || r.status === 'Out of Stock').length)}
+                {formatNumber(inventoryRisks.filter((r) => r.status === 'Critical Risk' || r.status === 'Out of Stock' || r.status.includes('Alert')).length)}
               </h3>
               <p style={{ fontSize: '0.75rem', color: '#b91c1c', marginTop: '0.35rem' }}>
-                Projected runout within lead time or 0 stock
+                Projected runout within lead time or low stock
               </p>
             </div>
           </section>
+
+          {/* Statistical Fallback Informational Banner */}
+          {!salesForecastData?.mlMetadata?.mlActive && (
+            <div
+              style={{
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.85rem 1.25rem',
+                marginBottom: '1.5rem',
+                fontSize: '0.85rem',
+                color: '#1e40af',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '0.75rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span style={{ fontSize: '1.25rem' }}>ℹ️</span>
+                <div>
+                  <strong>Provisional Trend Projection Active:</strong> Currently using statistical Holt exponential smoothing because this store has{' '}
+                  <strong>{salesForecastData?.historicalCoverage?.distinctRecordedDays || 0} distinct trading days</strong> recorded.{' '}
+                  At least <strong>14 distinct days</strong> ({Math.max(0, 14 - (salesForecastData?.historicalCoverage?.distinctRecordedDays || 0))} more days needed) are required to train the AI Random Forest model and compute verified reliability scores.
+                </div>
+              </div>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '9999px',
+                  backgroundColor: salesForecastData?.mlMetadata?.mlServiceOnline ? '#dcfce7' : '#f1f5f9',
+                  color: salesForecastData?.mlMetadata?.mlServiceOnline ? '#166534' : '#475569',
+                  border: `1px solid ${salesForecastData?.mlMetadata?.mlServiceOnline ? '#bbf7d0' : '#e2e8f0'}`,
+                }}
+              >
+                {salesForecastData?.mlMetadata?.mlServiceOnline ? '🟢 Python ML Service Ready' : '⚪ Python ML Service Standby'}
+              </span>
+            </div>
+          )}
 
           {/* Sales Forecast Chart & Uncertainty Band */}
           <section
@@ -589,7 +645,16 @@ const Forecast = () => {
                           {item.hasSufficientData ? (
                             `${formatNumber(item.totalProjectedDemand)} ${item.unit} (${item.avgDailyDemand}/d)`
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Insufficient History</span>
+                            <div>
+                              <span style={{ color: '#475569', fontSize: '0.8rem', display: 'block', fontWeight: 600 }}>
+                                Insufficient History ({item.distinctRecordedDays ?? 0}/3 days)
+                              </span>
+                              <span style={{ color: '#d97706', fontSize: '0.725rem' }}>
+                                {item.additionalDaysNeededForBaseline > 0
+                                  ? `${item.additionalDaysNeededForBaseline} more day(s) needed for baseline`
+                                  : '3 days needed for baseline'}
+                              </span>
+                            </div>
                           )}
                         </td>
                         <td style={{ padding: '0.75rem' }}>
@@ -598,7 +663,11 @@ const Forecast = () => {
                               {item.runoutDays === 0 ? '0 days (Depleted)' : `${item.runoutDays} days`}
                             </strong>
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>N/A (No sales data)</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                              {item.distinctRecordedDays !== undefined && item.distinctRecordedDays < 3
+                                ? 'Pending sales trend'
+                                : 'N/A (No sales data)'}
+                            </span>
                           )}
                         </td>
                         <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>
@@ -621,9 +690,16 @@ const Forecast = () => {
                         </td>
                         <td style={{ padding: '0.75rem' }}>
                           {item.suggestedReorder > 0 ? (
-                            <span style={{ color: '#b91c1c', fontWeight: 700 }}>
-                              +{formatNumber(item.suggestedReorder)} {item.unit}
-                            </span>
+                            <div>
+                              <span style={{ color: '#b91c1c', fontWeight: 700, display: 'block' }}>
+                                +{formatNumber(item.suggestedReorder)} {item.unit}
+                              </span>
+                              {!item.hasSufficientData && item.currentStock <= item.reorderThreshold && (
+                                <span style={{ fontSize: '0.7rem', color: '#b45309' }}>
+                                  Safety Buffer
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span style={{ color: 'var(--success)', fontWeight: 600 }}>Adequate</span>
                           )}

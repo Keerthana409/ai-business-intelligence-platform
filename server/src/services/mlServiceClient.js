@@ -10,13 +10,23 @@ export const MIN_TRANSACTIONS_FOR_IFOREST = 15;
 export const MIN_DAYS_FOR_DAILY_IFOREST = 14;
 
 export const getMLServiceBaseUrl = () => {
-  const raw = process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000';
-  return raw.trim().replace(/\/+$/, '');
+  const envUrl = process.env.ML_SERVICE_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+    // Strip any quotes and trailing slashes
+    return envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+  }
+  // In production, default directly to the deployed Python ML service on Render if ML_SERVICE_URL is unset
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://ai-bi-ml-service.onrender.com';
+  }
+  return 'http://127.0.0.1:8000';
 };
 
 export const getMLTimeoutMs = () => {
-  const parsed = parseInt(process.env.ML_SERVICE_TIMEOUT_MS || '4000', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 4000;
+  const raw = process.env.ML_SERVICE_TIMEOUT_MS;
+  const parsed = parseInt(String(raw || '').replace(/['"]/g, '').trim(), 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return process.env.NODE_ENV === 'production' ? 10000 : 4000;
 };
 
 /**
@@ -41,8 +51,9 @@ async function postToMLService(endpointPath, payload) {
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
+      console.warn(`[ML Service Warning] ${endpointPath} returned HTTP ${response.status}`);
       return {
-        serviceOnline: false,
+        serviceOnline: true,
         error: `ML service returned HTTP ${response.status}: ${errText.slice(0, 200)}`,
         data: null,
       };
@@ -55,9 +66,11 @@ async function postToMLService(endpointPath, payload) {
       data: json?.data || null,
     };
   } catch (err) {
+    const isTimeout = err?.name === 'AbortError';
+    console.warn(`[ML Service Fallback] ${endpointPath} unavailable (${isTimeout ? 'timed out' : err?.message || 'offline'}) - initiating statistical fallback`);
     return {
       serviceOnline: false,
-      error: err?.name === 'AbortError' ? 'ML service request timed out' : (err?.message || 'ML service unreachable'),
+      error: isTimeout ? 'ML service request timed out' : (err?.message || 'ML service unreachable'),
       data: null,
     };
   } finally {
@@ -70,7 +83,7 @@ async function postToMLService(endpointPath, payload) {
  */
 export async function checkMLServiceHealth() {
   const baseUrl = getMLServiceBaseUrl();
-  const timeoutMs = Math.min(2000, getMLTimeoutMs());
+  const timeoutMs = getMLTimeoutMs();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 

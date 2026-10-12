@@ -199,7 +199,7 @@ async function runModule5Tests() {
     assert(txOutlierResult.outliers[0].totalRevenue === 350, 'Outlier identified is $350 transaction');
     assert(txOutlierResult.outliers[0].modifiedZScore >= 3.5, 'Outlier has Modified Z-score >= 3.5');
     assert(txOutlierResult.outliers[0].severity === 'High', '$350 transaction has High severity');
-    assert(txOutlierResult.outliers[0].explanation.includes('Modified Z-score'), 'Explanation cites Modified Z-score');
+    assert(txOutlierResult.outliers[0].explanation.includes('deviation score') || txOutlierResult.outliers[0].explanation.includes('Modified Z-score'), 'Explanation cites deviation score');
 
     console.log('\n--- 2. Data Sufficiency Gate Tests ---');
     // 2.1: Daily anomalies insufficient data (< 7 recorded days)

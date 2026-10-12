@@ -294,6 +294,10 @@ export const runChronologicalBacktest = (values = [], testHorizon = 3) => {
 
   return {
     hasSufficientDataForBacktest: true,
+    isProvisional: n < 14,
+    accuracyStatus: n >= 14 ? 'Verified' : 'Pending (Needs 14+ Days)',
+    requiredDaysForValidation: 14,
+    additionalDaysNeededForValidation: Math.max(0, 14 - n),
     trainSize,
     testSize: k,
     testActuals,
@@ -351,15 +355,25 @@ export const evaluateProductDemandRisk = ({
 
   // Product Data Gate: requires at least 3 distinct days with recorded sales
   if (distinctRecordedDays < 3) {
+    let status = 'Pending History';
+    if (stockQuantity === 0) {
+      status = 'Out of Stock';
+    } else if (stockQuantity <= reorderThreshold) {
+      status = 'Low Stock (Buffer Alert)';
+    }
+
     return {
       hasSufficientData: false,
       distinctRecordedDays,
       minRequiredDays: 3,
-      reason: 'Insufficient historical sales records for this specific product to project demand.',
+      minRequiredDaysForML: 10,
+      additionalDaysNeededForBaseline: Math.max(0, 3 - distinctRecordedDays),
+      additionalDaysNeededForML: Math.max(0, 10 - distinctRecordedDays),
+      reason: `Product has ${distinctRecordedDays} distinct sales day(s); 3 required for trend baseline, 10 for AI Random Forest.`,
       currentStock: stockQuantity,
       reorderThreshold,
       leadTimeDays,
-      status: stockQuantity === 0 ? 'Out of Stock' : 'Insufficient Data',
+      status,
       runoutDays: stockQuantity === 0 ? 0 : null,
       projectedDailyDemand: 0,
       totalProjectedDemand: 0,

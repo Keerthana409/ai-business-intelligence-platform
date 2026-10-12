@@ -91,33 +91,30 @@ export const getDailyAnomalies = async (req, res) => {
     let fallbackReason = null;
     let artifactPath = null;
 
-    if (result.distinctRecordedDays >= MIN_DAYS_FOR_DAILY_IFOREST) {
-      const mlDailyRes = await requestMLDailyAnomalyScores({
-        dailyPoints: result.dailyPoints,
-        scopeId: String(req.user.id),
-      });
-      mlServiceOnline = mlDailyRes.serviceOnline;
+    // Query Python ML service to evaluate daily points
+    const mlDailyRes = await requestMLDailyAnomalyScores({
+      dailyPoints: result.dailyPoints,
+      scopeId: String(req.user.id),
+    });
+    mlServiceOnline = mlDailyRes.serviceOnline;
 
-      if (mlDailyRes.serviceOnline && mlDailyRes.data && mlDailyRes.data.mlTrained) {
-        mlActive = true;
-        artifactPath = mlDailyRes.data.artifactPath || null;
-        const scoresMap = mlDailyRes.data.scoresByDate || {};
+    if (mlDailyRes.serviceOnline && mlDailyRes.data && mlDailyRes.data.mlTrained) {
+      mlActive = true;
+      artifactPath = mlDailyRes.data.artifactPath || null;
+      const scoresMap = mlDailyRes.data.scoresByDate || {};
 
-        result.dailyPoints = result.dailyPoints.map((pt) => ({
-          ...pt,
-          isolationForestScore: scoresMap[pt.date] !== undefined ? scoresMap[pt.date] : null,
-        }));
-        result.anomalies = result.anomalies.map((anom) => ({
-          ...anom,
-          isolationForestScore: scoresMap[anom.date] !== undefined ? scoresMap[anom.date] : null,
-        }));
-      } else {
-        fallbackReason = !mlDailyRes.serviceOnline
-          ? 'Python ML service is currently offline; using non-parametric IQR Corridor + Trailing Median statistical fallback.'
-          : 'Daily series has zero variance; using statistical IQR Corridor.';
-      }
+      result.dailyPoints = result.dailyPoints.map((pt) => ({
+        ...pt,
+        isolationForestScore: scoresMap[pt.date] !== undefined ? scoresMap[pt.date] : null,
+      }));
+      result.anomalies = result.anomalies.map((anom) => ({
+        ...anom,
+        isolationForestScore: scoresMap[anom.date] !== undefined ? scoresMap[anom.date] : null,
+      }));
     } else {
-      fallbackReason = `Dataset has ${result.distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_DAILY_IFOREST} distinct days are required for daily Isolation Forest scoring. Using non-parametric IQR Corridor + 7-day Trailing Median baseline.`;
+      fallbackReason = !mlDailyRes.serviceOnline
+        ? 'Python ML service is currently offline; using non-parametric IQR Corridor + Trailing Median statistical fallback.'
+        : (mlDailyRes.data?.reason || `Dataset has ${result.distinctRecordedDays} distinct recorded trading days; at least ${MIN_DAYS_FOR_DAILY_IFOREST} distinct days are required for daily Isolation Forest scoring. Using non-parametric IQR Corridor + 7-day Trailing Median baseline.`);
     }
 
     res.status(200).json({
@@ -170,71 +167,49 @@ export const getTransactionOutliers = async (req, res) => {
     // Retrieve sales for user
     const sales = await Sale.find(query).sort({ date: -1 });
 
-    // 1. Always compute statistical Modified Z-Score baseline (min 10 transactions)
+    // 1. Always compute statistical Modified Z-Score baseline
     const statResult = detectTransactionOutliers(sales, {
       outlierThreshold: minScore,
       limit,
     });
 
-    // 2. If >= 15 transactions, evaluate with multivariate Isolation Forest in Python ML service
-    if (sales.length >= MIN_TRANSACTIONS_FOR_IFOREST) {
-      const mlTxRes = await requestMLTransactionOutliers({
-        transactions: sales,
-        outlierThreshold: minScore,
-        extremeThreshold: 5.0,
-        limit,
-        scopeId: String(req.user.id),
-        minRequiredTransactions: MIN_TRANSACTIONS_FOR_IFOREST,
-      });
+    // 2. Query multivariate Isolation Forest in Python ML service
+    const mlTxRes = await requestMLTransactionOutliers({
+      transactions: sales,
+      outlierThreshold: minScore,
+      extremeThreshold: 5.0,
+      limit,
+      scopeId: String(req.user.id),
+      minRequiredTransactions: MIN_TRANSACTIONS_FOR_IFOREST,
+    });
 
-      if (mlTxRes.serviceOnline && mlTxRes.data && mlTxRes.data.mlTrained) {
-        return res.status(200).json({
-          status: 'success',
-          data: {
-            ...mlTxRes.data,
-            minRequiredTransactions: 10,
-            minRequiredTransactionsForML: MIN_TRANSACTIONS_FOR_IFOREST,
-            mlMetadata: {
-              mlActive: true,
-              mlServiceOnline: true,
-              algorithmUsed: 'Isolation Forest (scikit-learn) + Modified Z-Score',
-              minRequiredTransactionsForML: MIN_TRANSACTIONS_FOR_IFOREST,
-              totalTransactions: sales.length,
-              evaluation: mlTxRes.data.mlEvaluation || null,
-              fallbackReason: null,
-            },
-          },
-        });
-      }
-
-      const fallbackReason = !mlTxRes.serviceOnline
-        ? `Python ML service is currently offline (${mlTxRes.error || 'connection refused'}). Retaining Boris Iglewicz & David Hoaglin Modified Z-Score statistical fallback.`
-        : 'Isolation Forest could not be fitted; retaining Modified Z-Score statistical fallback.';
-
+    if (mlTxRes.serviceOnline && mlTxRes.data && mlTxRes.data.mlTrained) {
       return res.status(200).json({
         status: 'success',
         data: {
-          ...statResult,
-          algorithm: 'Boris Iglewicz & David Hoaglin Modified Z-Score (MAD)',
+          ...mlTxRes.data,
+          minRequiredTransactions: 10,
           minRequiredTransactionsForML: MIN_TRANSACTIONS_FOR_IFOREST,
           mlMetadata: {
-            mlActive: false,
-            mlServiceOnline: mlTxRes.serviceOnline,
-            algorithmUsed: 'Boris Iglewicz & David Hoaglin Modified Z-Score (Statistical Fallback)',
+            mlActive: true,
+            mlServiceOnline: true,
+            algorithmUsed: 'Isolation Forest (scikit-learn) + Modified Z-Score',
             minRequiredTransactionsForML: MIN_TRANSACTIONS_FOR_IFOREST,
             totalTransactions: sales.length,
-            fallbackReason,
+            evaluation: mlTxRes.data.mlEvaluation || null,
+            fallbackReason: null,
           },
         },
       });
     }
 
-    const fallbackReason =
-      sales.length < 10
-        ? `Dataset has ${sales.length} transaction(s). At least 10 transactions are required for Modified Z-Score and ${MIN_TRANSACTIONS_FOR_IFOREST} transactions for Isolation Forest.`
-        : `Dataset has ${sales.length} transactions; at least ${MIN_TRANSACTIONS_FOR_IFOREST} transactions are required to train Isolation Forest reliably. Retaining Modified Z-Score (MAD) statistical fallback.`;
+    const fallbackReason = !mlTxRes.serviceOnline
+      ? `Python ML service is currently offline (${mlTxRes.error || 'connection refused'}). Retaining Boris Iglewicz & David Hoaglin Modified Z-Score statistical fallback.`
+      : (mlTxRes.data?.message || (sales.length < 10
+          ? `Dataset has ${sales.length} transaction(s). At least 10 transactions are required for Modified Z-Score and ${MIN_TRANSACTIONS_FOR_IFOREST} transactions for Isolation Forest.`
+          : `Dataset has ${sales.length} transactions; at least ${MIN_TRANSACTIONS_FOR_IFOREST} transactions are required to train Isolation Forest reliably. Retaining Modified Z-Score (MAD) statistical fallback.`));
 
-    res.status(200).json({
+    return res.status(200).json({
       status: 'success',
       data: {
         ...statResult,
@@ -242,7 +217,7 @@ export const getTransactionOutliers = async (req, res) => {
         minRequiredTransactionsForML: MIN_TRANSACTIONS_FOR_IFOREST,
         mlMetadata: {
           mlActive: false,
-          mlServiceOnline: false,
+          mlServiceOnline: mlTxRes.serviceOnline,
           algorithmUsed: statResult.hasSufficientData
             ? 'Boris Iglewicz & David Hoaglin Modified Z-Score (Statistical Fallback)'
             : 'None (Insufficient Data)',
