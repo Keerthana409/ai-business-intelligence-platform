@@ -25,13 +25,16 @@ export const getMLServiceBaseUrl = () => {
       .replace(/\/(health|api\/ml(\/.*)?|api)$/i, '');
 
     if (cleaned && !/^https?:\/\//i.test(cleaned)) {
-      cleaned = `https://${cleaned}`;
+      const isLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleaned);
+      cleaned = `${isLocal ? 'http' : 'https'}://${cleaned}`;
     }
 
     if (process.env.NODE_ENV === 'production') {
       const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleaned);
       const isSelfBackend = /ai-business-intelligence-platform/i.test(cleaned);
-      if (isLocalhost || isSelfBackend) {
+      // Bare internal service hostnames without a TLD (e.g. http://ai-bi-ml-service:10000) fail on Render free tier
+      const isBareInternalHost = /^https?:\/\/[a-z0-9-]+(:\d+)?$/i.test(cleaned);
+      if (isLocalhost || isSelfBackend || isBareInternalHost) {
         return DEFAULT_PROD_ML_URL;
       }
     }
@@ -47,49 +50,91 @@ export const getMLServiceBaseUrl = () => {
   return DEFAULT_DEV_ML_URL;
 };
 
+/**
+ * Return ordered candidate ML service base URLs.
+ * In test mode, strictly uses the single configured URL so offline/stub tests remain deterministic.
+ * In development and production, falls back to the deployed Render Python ML service if the primary URL is unreachable.
+ */
+export const getMLCandidateBaseUrls = () => {
+  const primary = getMLServiceBaseUrl();
+  if (
+    process.env.NODE_ENV === 'test' ||
+    process.env.ML_DISABLE_REMOTE_FALLBACK === 'true'
+  ) {
+    return [primary];
+  }
+  return Array.from(new Set([primary, DEFAULT_PROD_ML_URL].filter(Boolean)));
+};
+
 export const getMLTimeoutMs = () => {
   const raw = process.env.ML_SERVICE_TIMEOUT_MS;
   const parsed = parseInt(String(raw || '').replace(/['"]/g, '').trim(), 10);
-  if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  return process.env.NODE_ENV === 'production' ? 15000 : 5000;
+  if (process.env.NODE_ENV === 'test') {
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5000;
+  }
+  const minSafeTimeout = process.env.NODE_ENV === 'production' ? 20000 : 15000;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.max(minSafeTimeout, parsed);
+  }
+  return minSafeTimeout;
 };
 
 /**
- * Check Python ML Service health status
+ * Summarize request payload for safe server-side diagnostic logging
  */
-export async function checkMLServiceHealth() {
-  const baseUrl = getMLServiceBaseUrl();
-  const timeoutMs = getMLTimeoutMs();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(`${baseUrl}/health`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      return { online: false, status: 'offline', httpStatus: res.status };
-    }
-    const body = await res.json();
-    const isHealthy = Boolean(body && (body.status === 'ok' || body.service));
-    return { online: isHealthy, ...(body || {}) };
-  } catch {
-    return { online: false, status: 'offline' };
-  } finally {
-    clearTimeout(timer);
-  }
+function buildPayloadSummary(payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  const summary = {};
+  if (Array.isArray(payload.records)) summary.recordsCount = payload.records.length;
+  if (Array.isArray(payload.products)) summary.productsCount = payload.products.length;
+  if (Array.isArray(payload.transactions)) summary.transactionsCount = payload.transactions.length;
+  if (Array.isArray(payload.dailyPoints)) summary.dailyPointsCount = payload.dailyPoints.length;
+  if (payload.horizon !== undefined) summary.horizon = payload.horizon;
+  if (payload.minRequiredDays !== undefined) summary.minRequiredDays = payload.minRequiredDays;
+  return summary;
 }
 
 /**
- * Internal helper to perform JSON requests to the Python ML service with timeout protection
+ * Check Python ML Service health status across candidate URLs
  */
-async function postToMLService(endpointPath, payload) {
-  const baseUrl = getMLServiceBaseUrl();
+export async function checkMLServiceHealth(specificBaseUrl = null) {
+  const candidates = specificBaseUrl ? [specificBaseUrl] : getMLCandidateBaseUrls();
   const timeoutMs = getMLTimeoutMs();
+
+  for (const baseUrl of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${baseUrl}/health`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        continue;
+      }
+      const body = await res.json();
+      const isHealthy = Boolean(body && (body.status === 'ok' || body.service));
+      if (isHealthy) {
+        return { online: true, ...(body || {}) };
+      }
+    } catch {
+      // Try next candidate URL
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { online: false, status: 'offline' };
+}
+
+/**
+ * Single HTTP POST attempt to a specific baseUrl
+ */
+async function postSingleAttempt(baseUrl, endpointPath, payload, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
 
   try {
     const response = await fetch(`${baseUrl}${endpointPath}`, {
@@ -101,6 +146,7 @@ async function postToMLService(endpointPath, payload) {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+    const durationMs = Date.now() - startedAt;
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
@@ -119,13 +165,14 @@ async function postToMLService(endpointPath, payload) {
         // Keep raw text snippet
       }
 
-      console.warn(`[ML Service Warning] ${endpointPath} returned HTTP ${response.status}`);
+      console.warn(
+        `[ML Service HTTP Error] POST ${baseUrl}${endpointPath} -> HTTP ${response.status} (${durationMs}ms)`,
+        { payload: buildPayloadSummary(payload), detail: detailMsg }
+      );
 
-      // Gateway/proxy errors (502, 503, 504) indicate the Python service is unreachable/down.
-      // For other HTTP errors (e.g. 400, 404, 422, 500), verify whether /health is online.
       let serviceOnline = false;
       if (![502, 503, 504].includes(response.status)) {
-        const health = await checkMLServiceHealth();
+        const health = await checkMLServiceHealth(baseUrl);
         serviceOnline = health.online ? true : ![404, 502, 503, 504].includes(response.status);
       }
 
@@ -133,6 +180,7 @@ async function postToMLService(endpointPath, payload) {
         serviceOnline,
         requestSucceeded: false,
         httpStatus: response.status,
+        retryableGatewayError: [404, 502, 503, 504].includes(response.status),
         error: `ML service returned HTTP ${response.status}${detailMsg ? `: ${detailMsg}` : ''}`,
         data: null,
       };
@@ -140,10 +188,15 @@ async function postToMLService(endpointPath, payload) {
 
     const json = await response.json();
     if (!json || json.status === 'error' || !json.data) {
+      console.warn(
+        `[ML Service Payload Error] POST ${baseUrl}${endpointPath} -> Invalid payload (${durationMs}ms)`,
+        { payload: buildPayloadSummary(payload) }
+      );
       return {
         serviceOnline: true,
         requestSucceeded: false,
         httpStatus: response.status,
+        retryableGatewayError: false,
         error: json?.message || json?.detail || 'ML service returned an empty or invalid payload',
         data: json?.data || null,
       };
@@ -153,26 +206,87 @@ async function postToMLService(endpointPath, payload) {
       serviceOnline: true,
       requestSucceeded: true,
       httpStatus: response.status,
+      retryableGatewayError: false,
       error: null,
       data: json.data,
     };
   } catch (err) {
+    const durationMs = Date.now() - startedAt;
     const isTimeout = err?.name === 'AbortError';
     console.warn(
-      `[ML Service Fallback] ${endpointPath} unavailable (${
-        isTimeout ? 'timed out' : err?.message || 'offline'
-      }) - initiating statistical fallback`
+      `[ML Service Connection Warning] POST ${baseUrl}${endpointPath} failed (${durationMs}ms): ${
+        isTimeout ? 'request timed out' : err?.message || 'unreachable'
+      }`,
+      { payload: buildPayloadSummary(payload) }
     );
     return {
       serviceOnline: false,
       requestSucceeded: false,
       httpStatus: null,
-      error: isTimeout ? 'ML service request timed out' : (err?.message || 'ML service unreachable'),
+      isTimeout,
+      retryableGatewayError: true,
+      error: isTimeout ? 'ML service request timed out' : 'ML service unreachable',
       data: null,
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Internal helper to perform JSON requests to the Python ML service with timeout protection,
+ * candidate URL fallback, and cold-start wake-up retry.
+ */
+async function postToMLService(endpointPath, payload) {
+  const candidates = getMLCandidateBaseUrls();
+  const timeoutMs = getMLTimeoutMs();
+  let lastResult = null;
+
+  for (const baseUrl of candidates) {
+    let result = await postSingleAttempt(baseUrl, endpointPath, payload, timeoutMs);
+
+    // If the request succeeded or returned a definitive application error (e.g. HTTP 400/422/500 on an online service), return immediately
+    if (result.requestSucceeded || (result.serviceOnline && !result.retryableGatewayError)) {
+      return {
+        serviceOnline: result.serviceOnline,
+        requestSucceeded: result.requestSucceeded,
+        httpStatus: result.httpStatus,
+        error: result.error,
+        data: result.data,
+      };
+    }
+
+    // Outside of test mode, if a remote Render service timed out or returned 502/503/504 during cold start, wake /health and retry once
+    if (
+      process.env.NODE_ENV !== 'test' &&
+      baseUrl === DEFAULT_PROD_ML_URL &&
+      (result.isTimeout || [502, 503, 504].includes(result.httpStatus))
+    ) {
+      const healthWake = await checkMLServiceHealth(baseUrl);
+      if (healthWake.online) {
+        result = await postSingleAttempt(baseUrl, endpointPath, payload, timeoutMs);
+        if (result.requestSucceeded || result.serviceOnline) {
+          return {
+            serviceOnline: result.serviceOnline,
+            requestSucceeded: result.requestSucceeded,
+            httpStatus: result.httpStatus,
+            error: result.error,
+            data: result.data,
+          };
+        }
+      }
+    }
+
+    lastResult = result;
+  }
+
+  return {
+    serviceOnline: Boolean(lastResult?.serviceOnline),
+    requestSucceeded: false,
+    httpStatus: lastResult?.httpStatus ?? null,
+    error: lastResult?.error || 'ML service unreachable',
+    data: null,
+  };
 }
 
 /**

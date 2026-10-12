@@ -49,6 +49,8 @@ FEATURE_NAMES = [
     "time_index",
 ]
 
+_SALES_RF_CACHE: Dict[Any, Dict[str, Any]] = {}
+
 
 def format_date_key(date_val: Any) -> str:
     """Normalize a date string or datetime to YYYY-MM-DD."""
@@ -87,10 +89,18 @@ def align_daily_time_series(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     date_map: Dict[str, float] = {}
     for r in records:
+        if not isinstance(r, dict):
+            continue
         key = format_date_key(r.get("date"))
         if not key:
             continue
-        amt = float(r.get("amount", r.get("value", r.get("quantity", 0.0))) or 0.0)
+        raw_amt = r.get("amount", r.get("value", r.get("quantity", 0.0)))
+        try:
+            amt = float(raw_amt if raw_amt is not None else 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(amt):
+            continue
         date_map[key] = date_map.get(key, 0.0) + amt
 
     sorted_dates = sorted(date_map.keys())
@@ -204,29 +214,41 @@ def predict_recursive_horizon(
     last_date_str: str,
     start_time_idx: int,
     horizon: int,
+    compute_tree_std: bool = True,
 ) -> Tuple[List[float], List[float]]:
     """
     Autoregressively forecast `horizon` future days without any future leakage.
-    Also computes per-step ensemble tree standard deviation across all trees in the forest.
+    Computes both the ensemble mean prediction and per-step tree standard deviation
+    in a single pass over the fitted Cython decision trees.
     """
     working_history = list(seed_values)
     predictions: List[float] = []
     tree_stds: List[float] = []
+    trees = [est.tree_ for est in getattr(model, "estimators_", []) if hasattr(est, "tree_")]
 
     for step in range(1, horizon + 1):
         target_date = add_days(last_date_str, step)
         t_idx = start_time_idx + step - 1
         feats = build_feature_vector(working_history, target_date, t_idx)
-        X_step = np.array([feats], dtype=float)
+        X_step = np.array([feats], dtype=np.float32)
 
-        raw_pred = float(model.predict(X_step)[0])
-        bounded_pred = max(0.0, round(raw_pred, 2))
-        predictions.append(bounded_pred)
+        if trees:
+            raw_tree_vals = [float(t.predict(X_step)[0, 0]) for t in trees]
+            raw_pred = float(sum(raw_tree_vals) / len(raw_tree_vals))
+            bounded_pred = max(0.0, round(raw_pred, 2))
+            predictions.append(bounded_pred)
 
-        # Compute dispersion across individual estimators in the Random Forest
-        per_tree_preds = [max(0.0, float(est.predict(X_step)[0])) for est in model.estimators_]
-        tree_std = float(np.std(per_tree_preds, ddof=1)) if len(per_tree_preds) > 1 else 0.0
-        tree_stds.append(round(tree_std, 2))
+            if compute_tree_std and len(raw_tree_vals) > 1:
+                clamped_tree_vals = [max(0.0, v) for v in raw_tree_vals]
+                tree_std = float(np.std(clamped_tree_vals, ddof=1))
+                tree_stds.append(round(tree_std, 2))
+            else:
+                tree_stds.append(0.0)
+        else:
+            raw_pred = float(model.predict(X_step.astype(float))[0])
+            bounded_pred = max(0.0, round(raw_pred, 2))
+            predictions.append(bounded_pred)
+            tree_stds.append(0.0)
 
         # Append predicted value to history for next step's lag features
         working_history.append(bounded_pred)
@@ -358,6 +380,7 @@ def run_rf_chronological_backtest(
         last_date_str=last_train_date,
         start_time_idx=train_end_idx,
         horizon=k,
+        compute_tree_std=False,
     )
     test_actuals = [round(float(item["value"]), 2) for item in test_series]
 
@@ -426,61 +449,86 @@ def train_and_forecast_sales_rf(
             "reason": reason_msg,
         }
 
-    # 1. Leak-free chronological train/test evaluation
-    backtest = run_rf_chronological_backtest(series, test_horizon=3, warmup_lags=warmup_lags)
-
-    # 2. Fit final Random Forest model on full supervised historical dataset
-    X_all, y_all, supervised_dates = create_supervised_dataset(series, warmup_lags=warmup_lags)
-    rf_model = RandomForestRegressor(
-        n_estimators=RF_N_ESTIMATORS,
-        max_depth=RF_MAX_DEPTH,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
-        random_state=RF_RANDOM_STATE,
-    )
-    rf_model.fit(X_all, y_all)
-
-    # Extract feature importances
-    importances_raw = rf_model.feature_importances_
-    feature_importances = {
-        name: round(float(imp), 4)
-        for name, imp in sorted(
-            zip(FEATURE_NAMES, importances_raw),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-    }
-
-    # 3. Persist trained model artifact and metadata
     safe_key = sanitize_scope_key(scope_id)
     artifact_path = ARTIFACTS_DIR / f"rf_sales_{safe_key}.joblib"
     meta_path = ARTIFACTS_DIR / f"rf_sales_{safe_key}.meta.json"
+    series_sig = (
+        safe_key,
+        int(min_required_days),
+        tuple((str(item["date"]), float(item["value"])) for item in series),
+    )
 
-    metadata = {
-        "modelType": "RandomForestRegressor",
-        "scopeId": safe_key,
-        "trainedAt": datetime.now(timezone.utc).isoformat(),
-        "hyperparameters": {
-            "n_estimators": RF_N_ESTIMATORS,
-            "max_depth": RF_MAX_DEPTH,
-            "min_samples_leaf": RF_MIN_SAMPLES_LEAF,
-            "random_state": RF_RANDOM_STATE,
-        },
-        "featureNames": FEATURE_NAMES,
-        "featureImportances": feature_importances,
-        "distinctRecordedDays": distinct_days,
-        "totalCalendarDays": date_span_days,
-        "supervisedSampleCount": int(len(X_all)),
-        "startDate": start_date,
-        "endDate": end_date,
-        "backtestMetrics": backtest.get("metrics") if backtest.get("hasSufficientDataForBacktest") else None,
-    }
+    cached_bundle = _SALES_RF_CACHE.get(series_sig)
+    if cached_bundle is not None and artifact_path.exists():
+        rf_model = cached_bundle["rf_model"]
+        backtest = cached_bundle["backtest"]
+        feature_importances = cached_bundle["feature_importances"]
+        supervised_len = cached_bundle["supervised_len"]
+        y_all_std = cached_bundle["y_all_std"]
+    else:
+        # 1. Leak-free chronological train/test evaluation
+        backtest = run_rf_chronological_backtest(series, test_horizon=3, warmup_lags=warmup_lags)
 
-    try:
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        joblib.dump(rf_model, artifact_path)
-        meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        # 2. Fit final Random Forest model on full supervised historical dataset
+        X_all, y_all, _ = create_supervised_dataset(series, warmup_lags=warmup_lags)
+        rf_model = RandomForestRegressor(
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
+            min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+            random_state=RF_RANDOM_STATE,
+        )
+        rf_model.fit(X_all, y_all)
+
+        # Extract feature importances
+        importances_raw = rf_model.feature_importances_
+        feature_importances = {
+            name: round(float(imp), 4)
+            for name, imp in sorted(
+                zip(FEATURE_NAMES, importances_raw),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        }
+        supervised_len = int(len(X_all))
+        y_all_std = float(np.std(y_all, ddof=1) if len(y_all) > 1 else 5.0)
+
+        # 3. Persist trained model artifact and metadata
+        metadata = {
+            "modelType": "RandomForestRegressor",
+            "scopeId": safe_key,
+            "trainedAt": datetime.now(timezone.utc).isoformat(),
+            "hyperparameters": {
+                "n_estimators": RF_N_ESTIMATORS,
+                "max_depth": RF_MAX_DEPTH,
+                "min_samples_leaf": RF_MIN_SAMPLES_LEAF,
+                "random_state": RF_RANDOM_STATE,
+            },
+            "featureNames": FEATURE_NAMES,
+            "featureImportances": feature_importances,
+            "distinctRecordedDays": distinct_days,
+            "totalCalendarDays": date_span_days,
+            "supervisedSampleCount": supervised_len,
+            "startDate": start_date,
+            "endDate": end_date,
+            "backtestMetrics": backtest.get("metrics") if backtest.get("hasSufficientDataForBacktest") else None,
+        }
+
+        try:
+            ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+            joblib.dump(rf_model, artifact_path)
+            meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+        if len(_SALES_RF_CACHE) >= 64:
+            _SALES_RF_CACHE.clear()
+        _SALES_RF_CACHE[series_sig] = {
+            "rf_model": rf_model,
+            "backtest": backtest,
+            "feature_importances": feature_importances,
+            "supervised_len": supervised_len,
+            "y_all_std": y_all_std,
+        }
 
     # 4. Generate out-of-sample recursive forecast for `horizon` days
     all_values = [float(item["value"]) for item in series]
@@ -495,7 +543,7 @@ def train_and_forecast_sales_rf(
     backtest_rmse = (
         float(backtest["metrics"]["rmse"])
         if backtest.get("hasSufficientDataForBacktest")
-        else float(np.std(y_all, ddof=1) if len(y_all) > 1 else 5.0)
+        else y_all_std
     )
 
     predictions = []
@@ -545,7 +593,7 @@ def train_and_forecast_sales_rf(
             "endDate": end_date,
             "distinctRecordedDays": distinct_days,
             "totalCalendarDays": date_span_days,
-            "supervisedTrainingSamples": int(len(X_all)),
+            "supervisedTrainingSamples": supervised_len,
         },
         "historicalActuals": series[-30:],
         "predictions": predictions,
@@ -655,6 +703,7 @@ def evaluate_product_demand_rf(
         last_date_str=aligned["endDate"],
         start_time_idx=len(series),
         horizon=horizon,
+        compute_tree_std=False,
     )
 
     total_projected_demand = round(sum(forecast), 1)

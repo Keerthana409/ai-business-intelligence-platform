@@ -152,6 +152,43 @@ async function runMLIntegrationTests() {
     );
 
     // =========================================================================
+    // CASE 1B: 14-Day Boundary Gate (14 trading days -> Random Forest Active)
+    // =========================================================================
+    console.log('\n--- 1B. 14-Day Boundary Gate (14 Distinct Trading Days -> Random Forest Active) ---');
+    await Sale.deleteMany({ userId });
+    for (let day = 1; day <= 14; day++) {
+      const dateStr = `2026-09-${String(day).padStart(2, '0')}T12:00:00.000Z`;
+      const qty = 5 + (day % 3);
+      const rev = qty * 80;
+      await Sale.create({
+        userId,
+        productId: prod._id,
+        productName: prod.name,
+        category: prod.category,
+        quantitySold: qty,
+        unitPrice: 80,
+        totalCost: qty * 40,
+        totalRevenue: rev,
+        profit: rev - qty * 40,
+        paymentMethod: 'card',
+        date: new Date(dateStr),
+      });
+    }
+
+    const rf14Res = await request(app)
+      .get('/api/forecast/sales?horizon=7')
+      .set('Authorization', `Bearer ${token}`);
+    assert(rf14Res.status === 200, '14-day ML forecast returns HTTP 200');
+    assert(
+      rf14Res.body.data.algorithm === 'Random Forest Regression (scikit-learn)' &&
+        rf14Res.body.data.mlMetadata?.mlActive === true &&
+        rf14Res.body.data.mlMetadata?.mlAttempted === true &&
+        rf14Res.body.data.mlMetadata?.mlSucceeded === true &&
+        rf14Res.body.data.mlMetadata?.distinctRecordedDays === 14,
+      '14-day dataset activates Random Forest Regression (mlActive=true, mlAttempted=true, mlSucceeded=true)'
+    );
+
+    // =========================================================================
     // CASE 2: Sufficient Multi-Week History (30 trading days, 31 transactions) -> Trained ML Active
     // =========================================================================
     console.log('\n--- 2. Multi-Week History (30 Days / 31 Transactions -> Random Forest & Isolation Forest Active) ---');
@@ -194,7 +231,7 @@ async function runMLIntegrationTests() {
       date: new Date('2026-09-24T16:00:00.000Z'),
     });
 
-    // 2A. Test /api/forecast/sales -> RandomForestRegressor
+    // 2A. Test /api/forecast/sales -> RandomForestRegressor across 7d, 14d, and 30d horizons
     const mlForecastRes = await request(app)
       .get('/api/forecast/sales?horizon=7')
       .set('Authorization', `Bearer ${token}`);
@@ -225,6 +262,26 @@ async function runMLIntegrationTests() {
     assert(
       Boolean(mlForecastRes.body.data.statisticalBaselineComparison),
       'Includes side-by-side statisticalBaselineComparison (Holt\'s Linear vs Random Forest)'
+    );
+
+    const mlForecast14Res = await request(app)
+      .get('/api/forecast/sales?horizon=14')
+      .set('Authorization', `Bearer ${token}`);
+    assert(
+      mlForecast14Res.status === 200 &&
+        mlForecast14Res.body.data.mlMetadata?.mlActive === true &&
+        mlForecast14Res.body.data.predictions?.length === 14,
+      '14-day horizon returns 14 daily Random Forest predictions with mlActive=true'
+    );
+
+    const mlForecast30Res = await request(app)
+      .get('/api/forecast/sales?horizon=30')
+      .set('Authorization', `Bearer ${token}`);
+    assert(
+      mlForecast30Res.status === 200 &&
+        mlForecast30Res.body.data.mlMetadata?.mlActive === true &&
+        mlForecast30Res.body.data.predictions?.length === 30,
+      '30-day horizon returns 30 daily Random Forest predictions with mlActive=true'
     );
 
     // 2B. Test /api/forecast/demand -> SKU-level RandomForestRegressor

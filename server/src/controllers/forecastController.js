@@ -177,6 +177,18 @@ export const getSalesForecast = async (req, res) => {
       });
     }
 
+    if (mlAttempted) {
+      console.warn(
+        `[Sales Forecast Fallback] Random Forest did not activate for store (${distinctRecordedDays} trading days, horizon=${horizon}d):`,
+        {
+          mlServiceOnline,
+          httpStatus: mlRes.httpStatus,
+          error: mlRes.error || null,
+          reason: mlRes.data?.reason || null,
+        }
+      );
+    }
+
     // Build accurate, non-contradictory fallback reason
     let fallbackReason = '';
     if (!meetsMinDaysRequirement) {
@@ -311,13 +323,15 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
       horizon,
     });
 
-    mlBatch.push({
-      productId: String(prod._id),
-      salesRecords,
-      stockQuantity: prod.stockQuantity,
-      reorderThreshold: prod.reorderThreshold,
-      leadTimeDays: prod.leadTimeDays || 7,
-    });
+    if (evaluation.distinctRecordedDays >= MIN_DAYS_FOR_PRODUCT_RF) {
+      mlBatch.push({
+        productId: String(prod._id),
+        salesRecords,
+        stockQuantity: prod.stockQuantity,
+        reorderThreshold: prod.reorderThreshold,
+        leadTimeDays: prod.leadTimeDays || 7,
+      });
+    }
 
     results.push({
       productId: prod._id,
@@ -332,6 +346,10 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
         ? 'Holt\'s Linear Exponential Smoothing'
         : 'Insufficient Data',
       mlActive: false,
+      mlReason:
+        evaluation.distinctRecordedDays < MIN_DAYS_FOR_PRODUCT_RF
+          ? `Product has ${evaluation.distinctRecordedDays} distinct sales day(s); ${MIN_DAYS_FOR_PRODUCT_RF} required for SKU-level Random Forest training.`
+          : null,
       minRequiredDaysForBaseline: 3,
       minRequiredDaysForML: MIN_DAYS_FOR_PRODUCT_RF,
       additionalDaysNeededForBaseline: Math.max(0, 3 - evaluation.distinctRecordedDays),
@@ -340,7 +358,7 @@ async function evaluateCatalogDemandWithML(products, userId, horizon) {
     });
   }
 
-  // Always query Python ML service to evaluate all products and get ML status
+  // Query Python ML service only for products that meet the minimum SKU Random Forest threshold
   if (mlBatch.length > 0) {
     const mlBatchRes = await requestMLProductDemandForecast({
       products: mlBatch,
